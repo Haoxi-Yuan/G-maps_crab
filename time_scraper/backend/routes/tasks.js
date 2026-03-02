@@ -93,6 +93,61 @@ router.delete('/group/:groupId', async (req, res) => {
   }
 });
 
+// Create scrape task from completed search task results
+router.post('/create-from-search', async (req, res) => {
+  try {
+    const { searchTaskId, scrapeConfig } = req.body;
+    if (!searchTaskId) {
+      return res.status(400).json({ success: false, message: 'searchTaskId is required' });
+    }
+
+    const searchTask = TaskController.getTask(searchTaskId);
+    if (!searchTask) {
+      return res.status(404).json({ success: false, message: 'Search task not found' });
+    }
+
+    // Read search results to get place_ids
+    const searchConfig = searchTask.config;
+    const searchOutput = searchConfig.output;
+    const path = require('path');
+    const fs = require('fs');
+    const projectRoot = path.join(__dirname, '../..');
+    const searchResultsPath = path.isAbsolute(searchOutput)
+      ? searchOutput
+      : path.join(projectRoot, searchOutput);
+
+    if (!fs.existsSync(searchResultsPath)) {
+      return res.status(400).json({ success: false, message: 'Search results file not found' });
+    }
+
+    const searchResults = JSON.parse(fs.readFileSync(searchResultsPath, 'utf8'));
+    const placeIds = searchResults.uniquePlaceIds || [];
+
+    if (placeIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'No place_ids found in search results' });
+    }
+
+    // Copy place_ids to a task-specific immutable file
+    const placeIdsFile = searchResultsPath.replace(/\.json$/, '.place_ids.json');
+    fs.writeFileSync(placeIdsFile, JSON.stringify(placeIds, null, 2));
+
+    // Compute relative path for config
+    const relativePlaceIdsFile = path.relative(projectRoot, placeIdsFile);
+
+    const config = {
+      ...scrapeConfig,
+      taskType: 'scrape',
+      input: relativePlaceIdsFile,
+      sourceSearchTask: searchTaskId
+    };
+
+    const result = await TaskController.createTask(config);
+    res.json({ success: true, ...result, placeIdCount: placeIds.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // --- End parallel splitting routes ---
 
 router.get('/:taskId', async (req, res) => {

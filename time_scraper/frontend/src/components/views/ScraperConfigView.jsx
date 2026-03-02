@@ -1,10 +1,21 @@
 import { useState, useEffect } from 'react';
-import { Play, Settings, Database, ImageIcon, Shield, Layers } from 'lucide-react';
+import { Play, Settings, Database, ImageIcon, Shield, Layers, Search } from 'lucide-react';
 import { Card, SectionTitle, Label, Input, Toggle, Button } from '../shared/UIComponents';
 import api from '../../services/api';
 
-export function ScraperConfigView({ onStart }) {
-  const [searchMode, setSearchMode] = useState(false);
+// Task type modes: 'search' (POI search only), 'scrape' (from place_ids), 'search+scrape' (coupled)
+export function ScraperConfigView({ onStart, prefillPointsFile, onPrefillConsumed }) {
+  const [taskType, setTaskType] = useState('scrape');
+  const searchMode = taskType === 'search' || taskType === 'search+scrape';
+
+  // Handle prefill from GeneratorView
+  useEffect(() => {
+    if (prefillPointsFile) {
+      setTaskType('search');
+      setConfig(prev => ({ ...prev, points: prefillPointsFile }));
+      if (onPrefillConsumed) onPrefillConsumed();
+    }
+  }, [prefillPointsFile]);
   const [noReviews, setNoReviews] = useState(false);
   const [noImages, setNoImages] = useState(true);
   const [downloadImages, setDownloadImages] = useState(false);
@@ -66,21 +77,28 @@ export function ScraperConfigView({ onStart }) {
     : '';
 
   const handleStart = () => {
+    const isSearchOnly = taskType === 'search';
     const taskConfig = {
+      taskType,
       mode: searchMode ? 'search' : 'traditional',
       input: searchMode ? undefined : config.input,
       points: searchMode ? config.points : undefined,
       categories: searchMode ? (config.categories || 'config/categories.json') : undefined,
-      output: config.output,
+      output: isSearchOnly
+        ? (config.output.endsWith('.ndjson')
+            ? config.output.replace(/\.ndjson$/, '.search_results.json')
+            : config.output)
+        : config.output,
       limit: config.limit ? parseInt(config.limit) : undefined,
       headless,
-      maxReviews: noReviews ? undefined : parseInt(config.maxReviews),
-      maxScrolls: noReviews ? undefined : parseInt(config.maxScrolls),
-      reviewSort: noReviews ? undefined : config.reviewSort,
-      noReviews,
-      downloadImages,
-      imageOutput: downloadImages ? config.imageOutput : undefined,
-      format: 'ndjson',
+      // Search-only tasks don't need scrape config
+      maxReviews: isSearchOnly || noReviews ? undefined : parseInt(config.maxReviews),
+      maxScrolls: isSearchOnly || noReviews ? undefined : parseInt(config.maxScrolls),
+      reviewSort: isSearchOnly || noReviews ? undefined : config.reviewSort,
+      noReviews: isSearchOnly ? undefined : noReviews,
+      downloadImages: isSearchOnly ? undefined : downloadImages,
+      imageOutput: isSearchOnly || !downloadImages ? undefined : config.imageOutput,
+      format: isSearchOnly ? undefined : 'ndjson',
       randomDelay: true
     };
 
@@ -98,61 +116,63 @@ export function ScraperConfigView({ onStart }) {
         <Card className="h-full">
           <SectionTitle icon={Database} title="Operation Mode" />
 
-          <div className="space-y-4">
-            <div
-              onClick={() => setSearchMode(false)}
-              className={`p-4 border cursor-pointer transition-all ${!searchMode ? 'border-zinc-100 bg-zinc-900' : 'border-zinc-800 hover:border-zinc-600'}`}
+          <div className="space-y-3">
+            {/* POI Search Only */}
+            <ModeOption
+              active={taskType === 'search'}
+              onClick={() => setTaskType('search')}
+              title="POI Search Only"
+              description="Discover place_ids from sampling points. No scraping."
             >
-              <div className="flex items-center mb-2">
-                <div className={`w-3 h-3 rounded-full mr-3 ${!searchMode ? 'bg-zinc-100' : 'bg-zinc-800'}`} />
-                <span className="text-zinc-200 font-medium text-sm">Traditional Mode</span>
-              </div>
-              <p className="text-zinc-500 text-xs ml-6">Scrape directly from a predefined list of Place IDs.</p>
-              {!searchMode && (
-                <div className="mt-4 ml-6 animate-in fade-in">
-                  <Label>Input File</Label>
-                  <Input
-                    placeholder="data/places.txt"
-                    className="py-2"
-                    value={config.input}
-                    onChange={(e) => updateConfig('input', e.target.value)}
-                  />
-                </div>
-              )}
-            </div>
-
-            <div
-              onClick={() => setSearchMode(true)}
-              className={`p-4 border cursor-pointer transition-all ${searchMode ? 'border-zinc-100 bg-zinc-900' : 'border-zinc-800 hover:border-zinc-600'}`}
-            >
-              <div className="flex items-center mb-2">
-                <div className={`w-3 h-3 rounded-full mr-3 ${searchMode ? 'bg-zinc-100' : 'bg-zinc-800'}`} />
-                <span className="text-zinc-200 font-medium text-sm">POI Search Mode</span>
-              </div>
-              <p className="text-zinc-500 text-xs ml-6">Search from sampling points to discover new places.</p>
-
-              {searchMode && (
+              {taskType === 'search' && (
                 <div className="mt-4 ml-6 space-y-3 animate-in fade-in">
                   <div>
                     <Label>Points File</Label>
-                    <Input
-                      placeholder="data/sg/points.csv"
-                      className="py-2"
-                      value={config.points || ''}
-                      onChange={(e) => updateConfig('points', e.target.value)}
-                    />
+                    <Input placeholder="data/city/points.csv" className="py-2" value={config.points || ''} onChange={(e) => updateConfig('points', e.target.value)} />
                   </div>
                   <div>
                     <Label>Categories Config</Label>
-                    <Input
-                      value={config.categories || 'config/categories.json'}
-                      className="py-2"
-                      onChange={(e) => updateConfig('categories', e.target.value)}
-                    />
+                    <Input value={config.categories || 'config/categories.json'} className="py-2" onChange={(e) => updateConfig('categories', e.target.value)} />
                   </div>
                 </div>
               )}
-            </div>
+            </ModeOption>
+
+            {/* Scrape from Place IDs */}
+            <ModeOption
+              active={taskType === 'scrape'}
+              onClick={() => setTaskType('scrape')}
+              title="Scrape from Place IDs"
+              description="Scrape details from an existing place_id list."
+            >
+              {taskType === 'scrape' && (
+                <div className="mt-4 ml-6 animate-in fade-in">
+                  <Label>Input File</Label>
+                  <Input placeholder="data/places.txt" className="py-2" value={config.input} onChange={(e) => updateConfig('input', e.target.value)} />
+                </div>
+              )}
+            </ModeOption>
+
+            {/* Search + Scrape (coupled) */}
+            <ModeOption
+              active={taskType === 'search+scrape'}
+              onClick={() => setTaskType('search+scrape')}
+              title="Search + Scrape"
+              description="POI search then scrape in one task (legacy)."
+            >
+              {taskType === 'search+scrape' && (
+                <div className="mt-4 ml-6 space-y-3 animate-in fade-in">
+                  <div>
+                    <Label>Points File</Label>
+                    <Input placeholder="data/city/points.csv" className="py-2" value={config.points || ''} onChange={(e) => updateConfig('points', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Categories Config</Label>
+                    <Input value={config.categories || 'config/categories.json'} className="py-2" onChange={(e) => updateConfig('categories', e.target.value)} />
+                  </div>
+                </div>
+              )}
+            </ModeOption>
           </div>
         </Card>
       </div>
@@ -243,9 +263,9 @@ export function ScraperConfigView({ onStart }) {
         </Card>
       </div>
 
-      <div className="lg:col-span-4 space-y-6">
+      <div className={`lg:col-span-4 space-y-6 ${taskType === 'search' ? 'opacity-30 pointer-events-none' : ''}`}>
         <Card>
-          <SectionTitle icon={ImageIcon} title="Content Extraction" />
+          <SectionTitle icon={ImageIcon} title="Content Extraction" description={taskType === 'search' ? 'Not applicable for search-only mode' : undefined} />
           <div className="space-y-3">
             <Toggle label="Extract Reviews" checked={!noReviews} onChange={(v) => setNoReviews(!v)} />
 
@@ -313,12 +333,28 @@ export function ScraperConfigView({ onStart }) {
         </Card>
 
         <div className="pt-4">
-          <Button variant="primary" icon={Play} className="w-full" onClick={handleStart}>
-            Start Scraping
+          <Button variant="primary" icon={taskType === 'search' ? Search : Play} className="w-full" onClick={handleStart}>
+            {taskType === 'search' ? 'Start POI Search' : 'Start Scraping'}
           </Button>
         </div>
       </div>
 
+    </div>
+  );
+}
+
+function ModeOption({ active, onClick, title, description, children }) {
+  return (
+    <div
+      onClick={onClick}
+      className={`p-4 border cursor-pointer transition-all ${active ? 'border-zinc-100 bg-zinc-900' : 'border-zinc-800 hover:border-zinc-600'}`}
+    >
+      <div className="flex items-center mb-1">
+        <div className={`w-3 h-3 rounded-full mr-3 ${active ? 'bg-zinc-100' : 'bg-zinc-800'}`} />
+        <span className="text-zinc-200 font-medium text-sm">{title}</span>
+      </div>
+      <p className="text-zinc-500 text-xs ml-6">{description}</p>
+      {children}
     </div>
   );
 }

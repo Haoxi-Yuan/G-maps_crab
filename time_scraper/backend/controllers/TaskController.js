@@ -8,6 +8,7 @@ const WebSocketManager = require('../services/WebSocketManager');
 const WATCHDOG_POLL_INTERVAL = 30000;           // 30 seconds
 const WATCHDOG_STUCK_THRESHOLD = 15 * 60 * 1000; // 15 minutes
 const WATCHDOG_MAX_AUTO_RECOVERIES = 3;
+const MAX_BROWSER_TASKS = 3; // Max concurrent browser tasks (search + scrape)
 
 class TaskController {
   constructor() {
@@ -42,6 +43,14 @@ class TaskController {
     return { taskId, status: 'pending' };
   }
 
+  _getBrowserTaskCount() {
+    let count = 0;
+    for (const [, proc] of this.runningProcesses) {
+      if (proc.taskType !== 'generate') count++;
+    }
+    return count;
+  }
+
   async startTask(taskId) {
     const task = db.prepare('SELECT * FROM tasks WHERE task_id = ?').get(taskId);
     if (!task) throw new Error('Task not found');
@@ -53,16 +62,32 @@ class TaskController {
     const config = JSON.parse(task.config);
     const stateFile = task.state_file;
 
+    // Determine task type and select script
+    const taskType = config.taskType || (config.mode === 'search' ? 'search+scrape' : 'scrape');
+    let scriptPath;
+    if (taskType === 'search') {
+      scriptPath = path.join(__dirname, '../../src/poi_search_ipc.js');
+    } else {
+      scriptPath = path.join(__dirname, '../../src/gmaps_batch_scrape_ipc.js');
+    }
+
+    // Browser concurrency check
+    const browserCount = this._getBrowserTaskCount();
+    if (browserCount >= MAX_BROWSER_TASKS) {
+      throw new Error(
+        `Cannot start task: ${browserCount} browser tasks already running (max ${MAX_BROWSER_TASKS}). Stop a running task first.`
+      );
+    }
+
     const args = this._buildCommandArgs(config, taskId, stateFile);
 
-    const scriptPath = path.join(__dirname, '../../src/gmaps_batch_scrape_ipc.js');
     const child = spawn('node', [scriptPath, ...args], {
       cwd: path.join(__dirname, '../..'),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true  // Start new process group so we can kill Node + Chromium together
     });
 
-    this.runningProcesses.set(taskId, { child, stateFile });
+    this.runningProcesses.set(taskId, { child, stateFile, taskType });
 
     child.stdout.on('data', (data) => {
       const lines = data.toString().split('\n');
@@ -687,16 +712,33 @@ class TaskController {
   }
 
   _buildCommandArgs(config, taskId, stateFile) {
+    const taskType = config.taskType || (config.mode === 'search' ? 'search+scrape' : 'scrape');
     const args = ['--ipc-mode', '--state-file', stateFile];
 
     // Use task-specific checkpoint file to avoid conflicts between tasks
     const checkpointFile = stateFile.replace('.state.json', '.checkpoint.json');
     args.push('--checkpoint', checkpointFile);
 
-    if (config.mode === 'search') {
+    if (taskType === 'search') {
+      // Search-only: poi_search_ipc.js args
+      args.push('--points', config.points);
+      args.push('--categories', config.categories || 'config/categories.json');
+      args.push('--output', config.output);
+      if (config.searchZoom) args.push('--search-zoom', config.searchZoom);
+      if (config.headless) args.push('--headless');
+      if (config.start !== undefined && config.start !== null) {
+        args.push('--start', String(config.start));
+      }
+      if (config.limit) args.push('--limit', String(config.limit));
+      if (config.lang) args.push('--lang', config.lang);
+      return args;
+    }
+
+    // scrape or search+scrape: gmaps_batch_scrape_ipc.js args
+    if (taskType === 'search+scrape') {
       args.push('--search-mode');
       args.push('--points', config.points);
-      args.push('--categories', config.categories);
+      args.push('--categories', config.categories || 'config/categories.json');
       if (config.searchZoom) args.push('--search-zoom', config.searchZoom);
     } else {
       args.push('--input', config.input);
@@ -704,8 +746,6 @@ class TaskController {
 
     args.push('--output', config.output);
 
-    // Always pass --start to preserve chunk boundaries.
-    // The IPC script now reads checkpoints regardless of --start being set.
     if (config.start !== undefined && config.start !== null) {
       args.push('--start', String(config.start));
     }

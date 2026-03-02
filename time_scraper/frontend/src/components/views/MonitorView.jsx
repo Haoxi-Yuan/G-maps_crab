@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Pause, Play, Square, Terminal, Trash2, FileJson, PlayCircle } from 'lucide-react';
+import { Pause, Play, Square, Terminal, Trash2, FileJson, PlayCircle, ArrowRight } from 'lucide-react';
 import { useTask } from '../../hooks/useTask';
 import { Card, Button } from '../shared/UIComponents';
 import api from '../../services/api';
+
+const TASK_TYPE_LABELS = {
+  'search': 'POI Search',
+  'scrape': 'Scrape',
+  'search+scrape': 'Search + Scrape'
+};
 
 export function MonitorView({ taskId, onTaskDeleted, onSwitchTask }) {
   const { task, loading, pause, resume, stop, deleteTask } = useTask(taskId);
@@ -14,6 +20,7 @@ export function MonitorView({ taskId, onTaskDeleted, onSwitchTask }) {
 
   const groupId = task?.config?.groupId;
   const isGroupTask = !!groupId;
+  const taskType = task?.config?.taskType || (task?.config?.mode === 'search' ? 'search+scrape' : 'scrape');
 
   const loadGroupTasks = useCallback(async () => {
     if (!groupId) return;
@@ -212,7 +219,12 @@ export function MonitorView({ taskId, onTaskDeleted, onSwitchTask }) {
         <div className="flex-1 w-full">
           <div className="flex justify-between items-end mb-2">
             <div>
-              <h2 className="text-zinc-100 font-mono text-lg">{task.task_id}</h2>
+              <div className="flex items-center gap-3">
+                <h2 className="text-zinc-100 font-mono text-lg">{task.task_id}</h2>
+                <span className="text-[10px] px-2 py-0.5 border border-zinc-700 text-zinc-400 uppercase tracking-wider">
+                  {TASK_TYPE_LABELS[taskType] || taskType}
+                </span>
+              </div>
               <div className="flex items-center mt-1 space-x-2">
                 <span className={`w-2 h-2 rounded-full animate-pulse ${
                   task.status === 'running' ? 'bg-green-500' :
@@ -309,32 +321,37 @@ export function MonitorView({ taskId, onTaskDeleted, onSwitchTask }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card className="flex flex-col justify-between">
-          <span className="text-zinc-500 text-xs uppercase tracking-wider">Success</span>
-          <span className="text-zinc-100 text-3xl font-mono mt-2">
-            {task.stats?.success || 0}
-          </span>
-        </Card>
-        <Card className="flex flex-col justify-between">
-          <span className="text-zinc-500 text-xs uppercase tracking-wider">Failed</span>
-          <span className="text-zinc-100 text-3xl font-mono mt-2 text-red-400">
-            {task.stats?.failed || 0}
-          </span>
-        </Card>
-        <Card className="flex flex-col justify-between">
-          <span className="text-zinc-500 text-xs uppercase tracking-wider">Reviews</span>
-          <span className="text-zinc-100 text-3xl font-mono mt-2">
-            {(task.stats?.reviews || 0).toLocaleString()}
-          </span>
-        </Card>
-        <Card className="flex flex-col justify-between">
-          <span className="text-zinc-500 text-xs uppercase tracking-wider">Images</span>
-          <span className="text-zinc-100 text-3xl font-mono mt-2">
-            {(task.stats?.images || 0).toLocaleString()}
-          </span>
-        </Card>
-      </div>
+      {/* Task type-aware stats */}
+      {taskType === 'search' ? (
+        <SearchStats task={task} taskId={taskId} />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <Card className="flex flex-col justify-between">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Success</span>
+            <span className="text-zinc-100 text-3xl font-mono mt-2">
+              {task.stats?.success || 0}
+            </span>
+          </Card>
+          <Card className="flex flex-col justify-between">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Failed</span>
+            <span className="text-zinc-100 text-3xl font-mono mt-2 text-red-400">
+              {task.stats?.failed || 0}
+            </span>
+          </Card>
+          <Card className="flex flex-col justify-between">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Reviews</span>
+            <span className="text-zinc-100 text-3xl font-mono mt-2">
+              {(task.stats?.reviews || 0).toLocaleString()}
+            </span>
+          </Card>
+          <Card className="flex flex-col justify-between">
+            <span className="text-zinc-500 text-xs uppercase tracking-wider">Images</span>
+            <span className="text-zinc-100 text-3xl font-mono mt-2">
+              {(task.stats?.images || 0).toLocaleString()}
+            </span>
+          </Card>
+        </div>
+      )}
 
       <div className="bg-black border border-zinc-800 p-4 font-mono text-xs h-[400px] overflow-y-auto custom-scrollbar">
         <div className="flex items-center gap-2 mb-4 pb-2 border-b border-zinc-900 sticky top-0 bg-black">
@@ -361,6 +378,79 @@ export function MonitorView({ taskId, onTaskDeleted, onSwitchTask }) {
           <div className="mt-2 w-3 h-4 bg-zinc-500 animate-pulse"></div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SearchStats({ task, taskId }) {
+  const [creating, setCreating] = useState(false);
+
+  const placeIdCount = task.stats?.success || 0;
+  const isCompleted = task.status === 'completed';
+
+  const handleCreateScrapeTask = async () => {
+    setCreating(true);
+    try {
+      const result = await api.createScrapeFromSearch(taskId, {
+        output: 'output/results.ndjson',
+        headless: true,
+        maxReviews: 1000,
+        maxScrolls: 1000,
+        reviewSort: 'relevant',
+        format: 'ndjson',
+        randomDelay: true
+      });
+      alert(`Scrape task created!\n\nTask ID: ${result.taskId}\nPlace IDs: ${result.placeIdCount}\n\nGo to Scraper Config to customize settings, or start it from Task Monitor.`);
+    } catch (err) {
+      alert('Failed to create scrape task: ' + err.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <Card className="flex flex-col justify-between">
+          <span className="text-zinc-500 text-xs uppercase tracking-wider">Unique Place IDs</span>
+          <span className="text-cyan-400 text-3xl font-mono mt-2">
+            {placeIdCount.toLocaleString()}
+          </span>
+        </Card>
+        <Card className="flex flex-col justify-between">
+          <span className="text-zinc-500 text-xs uppercase tracking-wider">Searches Done</span>
+          <span className="text-zinc-100 text-3xl font-mono mt-2">
+            {task.progress?.current || 0}
+          </span>
+        </Card>
+        <Card className="flex flex-col justify-between">
+          <span className="text-zinc-500 text-xs uppercase tracking-wider">Total Searches</span>
+          <span className="text-zinc-100 text-3xl font-mono mt-2">
+            {task.progress?.total || 0}
+          </span>
+        </Card>
+      </div>
+
+      {isCompleted && placeIdCount > 0 && (
+        <Card className="border-cyan-900/50">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-zinc-200 text-sm font-medium">Search Complete</p>
+              <p className="text-zinc-500 text-xs mt-1">
+                Found {placeIdCount.toLocaleString()} unique place IDs. Create a scrape task to extract details.
+              </p>
+            </div>
+            <Button
+              variant="primary"
+              icon={ArrowRight}
+              onClick={handleCreateScrapeTask}
+              className={creating ? 'opacity-60 cursor-wait' : ''}
+            >
+              {creating ? 'Creating...' : 'Create Scrape Task'}
+            </Button>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

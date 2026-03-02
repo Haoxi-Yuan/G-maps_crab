@@ -87,5 +87,21 @@ export default {
 
   deleteTaskGroup: (groupId) => request(`/tasks/group/${groupId}`, {
     method: 'DELETE'
+  }),
+
+  // City generator APIs
+  generateCity: (params) => request('/generator/generate', {
+    method: 'POST',
+    body: JSON.stringify(params)
+  }),
+
+  getGeneratorData: (cityDir) => request(`/generator/data/${encodeURIComponent(cityDir)}`),
+
+  getGeneratorCities: () => request('/generator/cities'),
+
+  // Search → Scrape bridging
+  createScrapeFromSearch: (searchTaskId, scrapeConfig) => request('/tasks/create-from-search', {
+    method: 'POST',
+    body: JSON.stringify({ searchTaskId, scrapeConfig })
   })
 };
