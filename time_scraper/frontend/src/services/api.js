@@ -103,5 +103,17 @@ export default {
   createScrapeFromSearch: (searchTaskId, scrapeConfig) => request('/tasks/create-from-search', {
     method: 'POST',
     body: JSON.stringify({ searchTaskId, scrapeConfig })
-  })
+  }),
+
+  // Monitor APIs
+  getMonitorStats: () => request('/monitor/stats'),
+  getMonitorScans: (limit) => request(`/monitor/scans${limit ? `?limit=${limit}` : ''}`),
+  getMonitorScanDetail: (scanId) => request(`/monitor/scans/${scanId}`),
+  getMonitorChanges: (page, limit) => request(`/monitor/changes?page=${page || 1}&limit=${limit || 50}`),
+  startMonitorScan: (config) => request('/monitor/scan', { method: 'POST', body: JSON.stringify(config || {}) }),
+  startMonitorImport: (config) => request('/monitor/import', { method: 'POST', body: JSON.stringify(config) }),
+  startMonitorDiscover: (config) => request('/monitor/discover', { method: 'POST', body: JSON.stringify(config) }),
+  getMonitorReport: (scanId) => request(`/monitor/report/${scanId}`),
+  getMonitorReportDownloadUrl: (scanId) => `${API_BASE}/monitor/report/${scanId}/download`,
+  getMonitorPlaceIdsDownloadUrl: (scanId) => `${API_BASE}/monitor/report/${scanId}/placeids`
 };

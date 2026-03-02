@@ -34,6 +34,11 @@ Thumbs.db
 config/proxy-config-*.json
 data/coordinates_*.json
 
+# Monitor SQLite database
+db/monitor.sqlite
+db/monitor.sqlite-wal
+db/monitor.sqlite-shm
+
 # Temporary files
 *.tmp
 *.temp

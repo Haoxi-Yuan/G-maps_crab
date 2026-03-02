@@ -31,6 +31,7 @@ router.post('/generate', async (req, res) => {
       lloydIterations,
       bbox
     });
+    await pointsGen.init();
     const numPoints = pointsGen.calculateNumPoints();
     const points = pointsGen.generate(numPoints);
 
@@ -56,7 +57,8 @@ router.post('/generate', async (req, res) => {
     await fsPromises.writeFile(csvPath, csvContent);
 
     // Points GeoJSON
-    const turf = require('@turf/turf');
+    const { getTurf } = require('../../src/city-generator/turf-loader');
+    const turf = await getTurf();
     const features = points.map(p => turf.point([p.lng, p.lat]));
     const pointsGeojson = turf.featureCollection(features);
     const geojsonPath = path.join(outputDir, `${sanitizedName}_points.geojson`);

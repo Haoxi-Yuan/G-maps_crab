@@ -10,6 +10,7 @@ const TaskController = require('./controllers/TaskController');
 const tasksRouter = require('./routes/tasks');
 const filesRouter = require('./routes/files');
 const generatorRouter = require('./routes/generator');
+const monitorRouter = require('./routes/monitor');
 
 const app = express();
 const server = http.createServer(app);
@@ -26,6 +27,7 @@ app.use((req, res, next) => {
 app.use('/api/tasks', tasksRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/generator', generatorRouter);
+app.use('/api/monitor', monitorRouter);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -62,9 +64,12 @@ server.listen(PORT, async () => {
   console.log('[Server] Task recovery complete\n');
 });
 
+const MonitorDBService = require('./services/MonitorDBService');
+
 process.on('SIGINT', () => {
   console.log('\n[Server] Shutting down gracefully...');
   db._flushSync();
+  MonitorDBService.close();
   server.close(() => {
     console.log('[Server] Server closed');
     process.exit(0);
@@ -74,6 +79,7 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   console.log('\n[Server] Received SIGTERM, shutting down gracefully...');
   db._flushSync();
+  MonitorDBService.close();
   server.close(() => {
     console.log('[Server] Server closed');
     process.exit(0);

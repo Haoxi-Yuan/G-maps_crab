@@ -74,7 +74,7 @@ class BoundaryGenerator {
       try {
         console.log(`Trying query strategy ${i + 1}/${queries.length}...`);
         const data = await this._queryOverpass(queries[i]);
-        const geojson = this._convertToGeoJSON(data);
+        const geojson = await this._convertToGeoJSON(data);
         console.log(`Success with strategy ${i + 1}`);
         return geojson;
       } catch (error) {
@@ -183,7 +183,7 @@ class BoundaryGenerator {
    * Convert Overpass data to GeoJSON
    * @private
    */
-  _convertToGeoJSON(overpassData) {
+  async _convertToGeoJSON(overpassData) {
     if (!overpassData.elements || overpassData.elements.length === 0) {
       throw new Error('No boundary data found');
     }
@@ -235,7 +235,8 @@ class BoundaryGenerator {
     if (features.length > 1) {
       console.log(`Found ${features.length} features, attempting to merge...`);
       try {
-        const turf = require('@turf/turf');
+        const { getTurf } = require('./turf-loader');
+        const turf = await getTurf();
         let merged = features[0];
         for (let i = 1; i < features.length; i++) {
           try {

@@ -2,14 +2,14 @@
 
 const { Command } = require('commander');
 const path = require('path');
-const { loadConfig } = require('./src/config');
-const MonitorDB = require('./src/db');
-const { importBaseline } = require('./src/baseline-importer');
-const ChangeScanner = require('./src/change-scanner');
-const ReportGenerator = require('./src/report-generator');
-const { exportSnapshot } = require('./src/snapshot-exporter');
-const POIDiscovery = require('./src/poi-discovery');
-const { log, formatDuration } = require('./src/utils');
+const { loadConfig } = require('../time_scraper/src/monitor/config');
+const MonitorDB = require('../time_scraper/src/monitor/db');
+const { importBaseline } = require('../time_scraper/src/monitor/baseline-importer');
+const ChangeScanner = require('../time_scraper/src/monitor/change-scanner');
+const ReportGenerator = require('../time_scraper/src/monitor/report-generator');
+const { exportSnapshot } = require('../time_scraper/src/monitor/snapshot-exporter');
+const POIDiscovery = require('../time_scraper/src/monitor/poi-discovery');
+const { log, formatDuration } = require('../time_scraper/src/monitor/utils');
 
 const program = new Command();
 

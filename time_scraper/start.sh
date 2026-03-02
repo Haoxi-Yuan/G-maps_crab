@@ -20,12 +20,29 @@ echo -e "${BLUE}========================================${NC}"
 echo -e "${BLUE}Google Maps Batch Scraper - Startup${NC}"
 echo -e "${BLUE}========================================${NC}\n"
 
-# Check Node.js
+# Check Node.js — also search in conda environments
 echo -e "${YELLOW}[1/5] Checking Node.js...${NC}"
 if ! command -v node &> /dev/null; then
-    echo -e "${RED}Error: Node.js is not installed${NC}"
-    echo "Please install Node.js 16+ from https://nodejs.org/"
-    exit 1
+    # Try to find node in conda envs (common on HPC / shared servers)
+    CONDA_NODE=""
+    for candidate in \
+        "$HOME/miniconda3/envs/gmaps_crab/bin" \
+        "$(dirname "$SCRIPT_DIR")/../miniconda3/envs/gmaps_crab/bin" \
+        "/data/$(whoami)/miniconda3/envs/gmaps_crab/bin"; do
+        if [ -x "$candidate/node" ]; then
+            CONDA_NODE="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$CONDA_NODE" ]; then
+        echo -e "${YELLOW}Node.js not in PATH, found in conda: $CONDA_NODE${NC}"
+        export PATH="$CONDA_NODE:$PATH"
+    else
+        echo -e "${RED}Error: Node.js is not installed${NC}"
+        echo "Please install Node.js 16+ from https://nodejs.org/"
+        exit 1
+    fi
 fi
 
 NODE_VERSION=$(node -v)

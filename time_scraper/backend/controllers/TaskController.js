@@ -46,7 +46,9 @@ class TaskController {
   _getBrowserTaskCount() {
     let count = 0;
     for (const [, proc] of this.runningProcesses) {
-      if (proc.taskType !== 'generate') count++;
+      // monitor-import doesn't use a browser; generate doesn't either
+      if (proc.taskType === 'generate' || proc.taskType === 'monitor-import') continue;
+      count++;
     }
     return count;
   }
@@ -67,6 +69,8 @@ class TaskController {
     let scriptPath;
     if (taskType === 'search') {
       scriptPath = path.join(__dirname, '../../src/poi_search_ipc.js');
+    } else if (taskType.startsWith('monitor-')) {
+      scriptPath = path.join(__dirname, '../../src/monitor/monitor-scan-ipc.js');
     } else {
       scriptPath = path.join(__dirname, '../../src/gmaps_batch_scrape_ipc.js');
     }
@@ -718,6 +722,21 @@ class TaskController {
     // Use task-specific checkpoint file to avoid conflicts between tasks
     const checkpointFile = stateFile.replace('.state.json', '.checkpoint.json');
     args.push('--checkpoint', checkpointFile);
+
+    // Monitor task types
+    if (taskType.startsWith('monitor-')) {
+      const scanType = taskType.replace('monitor-', ''); // scan, discover, import
+      args.push('--scan-type', scanType);
+      if (config.limit) args.push('--limit', String(config.limit));
+      if (config.resume) args.push('--resume');
+      if (config.source) args.push('--source', config.source);
+      if (config.format) args.push('--format', config.format);
+      if (config.city) args.push('--city', config.city);
+      if (config.categories) args.push('--categories', config.categories);
+      if (config.cellSize) args.push('--cell-size', String(config.cellSize));
+      if (config.headless === false) args.push('--no-headless');
+      return args;
+    }
 
     if (taskType === 'search') {
       // Search-only: poi_search_ipc.js args

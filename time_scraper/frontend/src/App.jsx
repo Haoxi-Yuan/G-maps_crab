@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Settings, Activity, MapPin } from 'lucide-react';
+import { Settings, Activity, MapPin, Radar } from 'lucide-react';
 import crabIcon from './image/crab.png';
 import { InstanceSwitcher } from './components/InstanceSwitcher';
 import { ExitConfirmModal } from './components/ExitModal';
 import { MonitorView } from './components/views/MonitorView';
 import { ScraperConfigView } from './components/views/ScraperConfigView';
 import { GeneratorView } from './components/views/GeneratorView';
+import { POIMonitorView } from './components/views/POIMonitorView';
 import api from './services/api';
 
 export default function App() {
@@ -104,6 +105,7 @@ export default function App() {
     { id: 'generator', label: 'City Generator', icon: MapPin },
     { id: 'config', label: 'Scraper Config', icon: Settings },
     { id: 'monitor', label: 'Task Monitor', icon: Activity },
+    { id: 'poi-monitor', label: 'POI Monitor', icon: Radar },
   ];
 
   return (
@@ -178,6 +180,7 @@ export default function App() {
         {activeTab === 'generator' && <GeneratorView onStartSearch={handleStartSearchFromGenerator} />}
         {activeTab === 'config' && <ScraperConfigView onStart={handleStartTask} prefillPointsFile={prefillPointsFile} onPrefillConsumed={() => setPrefillPointsFile(null)} />}
         {activeTab === 'monitor' && <MonitorView taskId={currentTaskId} onTaskDeleted={handleTaskDeleted} onSwitchTask={setCurrentTaskId} />}
+        {activeTab === 'poi-monitor' && <POIMonitorView onTaskStarted={(taskId) => { setCurrentTaskId(taskId); setActiveTab('monitor'); loadRunningInstances(); }} />}
       </main>
 
       {showExitModal && (

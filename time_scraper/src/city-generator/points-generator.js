@@ -4,7 +4,9 @@
  * Uses rejection sampling + Lloyd relaxation algorithm
  */
 
-const turf = require('@turf/turf');
+const { getTurf } = require('./turf-loader');
+
+let turf = null;
 
 class PointsGenerator {
   /**
@@ -20,9 +22,14 @@ class PointsGenerator {
       bbox: options.bbox || null, // Optional bounding box [minLng, minLat, maxLng, maxLat]
       ...options
     };
+    this.polygon = null;
+  }
+
+  async init() {
+    turf = await getTurf();
 
     // Get the main polygon from the GeoJSON
-    this.polygon = this._extractMainPolygon(geojson);
+    this.polygon = this._extractMainPolygon(this.geojson);
     if (!this.polygon) {
       throw new Error('No valid polygon found in GeoJSON');
     }
@@ -32,6 +39,7 @@ class PointsGenerator {
       this.polygon = this._clipToBbox(this.polygon, this.options.bbox);
       console.log(`Applied bbox filter: ${this.options.bbox.join(', ')}`);
     }
+    return this;
   }
 
   /**

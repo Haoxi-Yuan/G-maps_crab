@@ -155,7 +155,8 @@ class CityDataGenerator {
     console.log(`Points saved to: ${csvPath} (CSV)`);
 
     // GeoJSON format (for visualization)
-    const turf = require('@turf/turf');
+    const { getTurf } = require('./turf-loader');
+    const turf = await getTurf();
     const features = points.map(p => turf.point([p.lng, p.lat]));
     const geojson = turf.featureCollection(features);
     const geojsonPath = path.join(outputDir, `${cityName}_points.geojson`);
@@ -171,7 +172,8 @@ class CityDataGenerator {
     const outputDir = this.options.outputDir;
 
     // Calculate statistics
-    const turf = require('@turf/turf');
+    const { getTurf } = require('./turf-loader');
+    const turf = await getTurf();
     let polygon;
 
     if (boundary.features && boundary.features.length > 0) {
