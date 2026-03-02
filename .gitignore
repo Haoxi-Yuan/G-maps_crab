@@ -1,0 +1,44 @@
+# === Legacy code (不上传) ===
+scraper/
+
+# === Dependencies ===
+node_modules/
+Pipeline/venv/
+Pipeline/__pycache__/
+
+# === Data & Output (所有生成数据) ===
+Pipeline/data/
+time_scraper/output/
+time_scraper/data/
+time_scraper/db/
+time_scraper/logs/
+*.ndjson
+*.checkpoint.json
+*.state.json
+
+# === Logs ===
+*.log
+*.pid
+
+# === Proxy/Sensitive config ===
+time_scraper/config/proxy-config-*.json
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Temp ===
+*.tmp
+*.temp
+*.bak
+*.pre_truncate
+
+# === Frontend build ===
+time_scraper/frontend/dist/
