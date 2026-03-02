@@ -1,0 +1,228 @@
+POI Monitor
+===========
+
+Lightweight sentinel system for detecting changes in Google Maps POI data.
+Periodically scans 4 key fields (reviewCount, rating, openingHours, popularTimes),
+identifies changed POIs, and outputs place_id lists for targeted re-scraping by
+the upstream batch scraper system.
+
+
+Prerequisites
+-------------
+
+- Node.js >= 18
+- Chromium (installed via Playwright)
+
+    npm install
+    npx playwright install chromium
+
+
+Quick Start
+-----------
+
+    # Import baseline data
+    node cli.js import --source /path/to/scraper/output
+
+    # Run a test scan (50 POIs)
+    node cli.js scan --limit 50
+
+    # View database stats
+    node cli.js stats
+
+    # Or use the interactive menu
+    bash monitor.sh
+
+
+Architecture
+------------
+
+                 +-----------------+
+                 |   cli.js        |  CLI entry (commander)
+                 +--------+--------+
+                          |
+          +---------------+---------------+
+          |               |               |
+  +-------v------+ +-----v------+ +------v-------+
+  | baseline-    | | change-    | | poi-         |
+  | importer.js  | | scanner.js | | discovery.js |
+  +--------------+ +-----+------+ +--------------+
+          |               |               |
+          |        +------v------+        |
+          |        | extract-poi-|        |
+          |        | data.js     |        |
+          |        +-------------+        |
+          |               |               |
+  +-------v---------------v---------------v--+
+  |              db.js (SQLite)               |
+  +-------------------------------------------+
+
+
+Commands
+--------
+
+import    Import baseline data from scraper output.
+
+          node cli.js import --source <path> [--format auto|old|new]
+
+          Supported formats:
+            old - Directory tree: {Category}/{PlaceId}/rev_data/reviews.json
+            new - NDJSON files with business, openingHours, popularTimes fields
+
+scan      Run change detection scan against baseline.
+
+          node cli.js scan [--limit <n>] [--resume]
+
+          Launches Playwright browsers, navigates to each POI page,
+          extracts current data, compares with baseline, and records changes.
+          Generates a report and snapshot on completion.
+
+stats     Display database statistics.
+
+          node cli.js stats
+
+report    View or regenerate a scan report.
+
+          node cli.js report --scan-id <id>
+
+discover  Discover new POIs by geographic sampling and Google Maps search.
+
+          node cli.js discover [--city <name>] [--categories <list>]
+                               [--cell-size <meters>] [--points <n>]
+                               [--boundary <file>] [--limit <n>]
+
+          Generates sampling points within city boundary using Lloyd
+          relaxation, then searches Google Maps at each point for POIs
+          not yet in the database.
+
+clean-scan
+          Clean a bad scan and restore corrupted baseline values.
+
+          node cli.js clean-scan --scan-id <id>
+
+
+Monitored Fields
+----------------
+
+Field             Comparison Method    Notes
+-----             -----------------    -----
+reviewCount       Exact integer        null->value not reported as change
+rating            Float tolerance 0.05 null->value not reported as change
+openingHoursHash  Exact string (SHA256) Normalized before hashing
+popularTimesHash  Exact string (SHA256) Normalized before hashing
+
+
+Change Types
+------------
+
+REVIEW_CHANGE         reviewCount or rating changed
+HOURS_CHANGE          openingHours changed
+POPULAR_TIMES_CHANGE  popularTimes changed
+MULTI_CHANGE          Both review fields and hours/times changed
+POI_GONE              POI page failed to load N consecutive times
+NEW_POI               POI found via discovery that is not in database
+
+
+Database Schema
+---------------
+
+poi_baseline
+  placeId            TEXT PRIMARY KEY
+  name               TEXT
+  reviewCount        INTEGER
+  rating             REAL
+  openingHoursHash   TEXT
+  popularTimesHash   TEXT
+  navigablePlaceId   TEXT        ChIJ format ID for URL navigation
+  lastCheckedAt      TEXT
+  consecutiveFailures INTEGER   Default 0
+  status             TEXT        active | gone
+  sourceFormat       TEXT        old | new | discovered
+  importedAt         TEXT
+  updatedAt          TEXT
+
+change_log
+  id                 INTEGER PRIMARY KEY
+  scanId             TEXT
+  placeId            TEXT
+  changeType         TEXT
+  fields             TEXT (JSON)
+  detectedAt         TEXT
+
+scan_history
+  scanId             TEXT PRIMARY KEY
+  startedAt          TEXT
+  completedAt        TEXT
+  totalPois          INTEGER
+  scannedCount       INTEGER
+  changedCount       INTEGER
+  failedCount        INTEGER
+  summary            TEXT (JSON)
+  status             TEXT
+
+
+Output Structure
+----------------
+
+output/
+  reports/
+    YYYY-MM-DD-HHMM/
+      change_report.json      Full change details with URLs
+      changed_placeids.txt    One place_id per line (scraper input)
+  snapshots/
+    baseline_YYYY-MM-DD.json  Full database export
+  discovery/
+    {city}_boundary.geojson   Cached city boundary
+
+
+Configuration
+-------------
+
+config/monitor-config.json
+
+  concurrency.browsers          Number of browser instances (default: 3)
+  concurrency.tabsPerBrowser    Tabs per browser (default: 5)
+  thresholds.ratingTolerance    Float comparison tolerance (default: 0.05)
+  thresholds.consecutiveFailuresForGone
+                                Failures before marking POI gone (default: 5)
+  thresholds.poiTimeoutMs       Per-POI timeout in ms (default: 10000)
+  thresholds.navigationTimeoutMs Navigation timeout in ms (default: 30000)
+  scan.batchSize                POIs per batch (default: 100)
+  scan.delayBetweenBatchesMs    Delay between batches (default: 1000)
+  browser.headless              Run headless (default: true)
+
+
+Data Extraction Strategy
+------------------------
+
+The scanner uses a two-step page loading approach:
+
+  1. Load search API URL to initialize Google Maps session
+  2. Load place URL for full APP_INITIALIZATION_STATE data
+
+Data extraction priority:
+
+  rating       DOM first ([role="img"][aria-label*="star"]), APP_STATE fallback
+  reviewCount  DOM first (button text / aria-label), APP_STATE fallback
+  openingHours APP_STATE only (not available in DOM)
+  popularTimes APP_STATE only (not available in DOM)
+
+Page load verification uses placeId presence in URL/APP_STATE rather than
+DOM element checks, which avoids false failures from SPA rendering delays.
+
+
+PlaceId Formats
+---------------
+
+Two formats coexist in the database:
+
+  Old (ChIJ):  ChIJOW9NG7QP2jEROd_IfYBoP-s    Works in place_id: URLs
+  New (hex):   0x31da0fb41b4d6f39:0xeb3f...     Does NOT work in place_id: URLs
+
+The navigablePlaceId column stores the ChIJ format extracted from NDJSON _meta
+for hex-format POIs, ensuring correct URL navigation in reports and scanning.
+
+
+License
+-------
+
+MIT

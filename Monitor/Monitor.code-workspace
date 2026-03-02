@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../time_scraper"
+		},
+		{
+			"path": "../scraped_by_categories"
+		},
+		{
+			"path": "../Pipeline/data"
+		}
+	],
+	"settings": {}
+}
