@@ -1,0 +1,13 @@
+TOTAL=$(python - <<'PY'
+import json
+with open('/Volumes/Data/time_scraper/coordinates_singapore.json','r',encoding='utf-8') as f:
+    print(len(json.load(f)))
+PY
+)
+
+BATCH=10
+for ((i=0; i<TOTAL; i+=BATCH)); do
+  node /Volumes/Data/time_scraper/gmaps_batch_scrape_stable.js \
+    --limit "$BATCH" --delay 0 --hl en
+  sleep $((5 + RANDOM % 2))
+done

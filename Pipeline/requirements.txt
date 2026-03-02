@@ -1,0 +1,11 @@
+# Core dependencies
+torch>=2.0.0
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.0
+numpy>=1.24.0
+tqdm>=4.65.0
+pydantic>=2.0.0
+
+# LLM backends (install as needed)
+# openai>=1.0.0
+# anthropic>=0.18.0

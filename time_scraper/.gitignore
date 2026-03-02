@@ -1,0 +1,39 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Output files
+output/*.ndjson
+output/*.json
+output/*.log
+output/images/
+*.checkpoint.json
+
+# Test files
+test_single_place.json
+test_*.ndjson
+test_*.json
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive data
+config/proxy-config-*.json
+data/coordinates_*.json
+
+# Temporary files
+*.tmp
+*.temp

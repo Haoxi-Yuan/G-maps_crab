@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../scraped_by_categories"
+		},
+		{
+			"path": "../scraper"
+		},
+		{
+			"path": "../notebooks"
+		}
+	],
+	"settings": {}
+}
