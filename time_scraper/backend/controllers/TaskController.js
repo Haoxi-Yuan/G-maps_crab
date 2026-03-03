@@ -85,7 +85,19 @@ class TaskController {
 
     const args = this._buildCommandArgs(config, taskId, stateFile);
 
-    const child = spawn('node', [scriptPath, ...args], {
+    // For monitor-scan tasks with resume, ensure a checkpoint file exists
+    if (taskType === 'monitor-scan' && config.resume) {
+      const checkpointFile = stateFile.replace('.state.json', '.checkpoint.json');
+      if (!fs.existsSync(checkpointFile)) {
+        const best = this._findBestMonitorCheckpoint(checkpointFile);
+        if (best) {
+          fs.copyFileSync(best, checkpointFile);
+          console.log(`[TaskController] Copied checkpoint ${path.basename(best)} → ${path.basename(checkpointFile)}`);
+        }
+      }
+    }
+
+    const child = spawn(process.execPath, [scriptPath, ...args], {
       cwd: path.join(__dirname, '../..'),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true  // Start new process group so we can kill Node + Chromium together
@@ -187,7 +199,14 @@ class TaskController {
 
     try {
       this._forceKillTask(taskId);
-      return { success: true };
+      // Update DB status immediately — don't rely on the child process to report 'stopped'
+      db.prepare(`
+        UPDATE tasks SET status = ?, completed_at = ?, error = ?
+        WHERE task_id = ?
+      `).run('stopped', Date.now(), null, taskId);
+      this.runningProcesses.delete(taskId);
+      WebSocketManager.emit(taskId, 'status', { status: 'stopped' });
+      return { success: true, message: 'Task stopped.' };
     } catch (error) {
       throw new Error(`Failed to stop task: ${error.message}`);
     }
@@ -355,6 +374,25 @@ class TaskController {
     }
 
     const config = JSON.parse(task.config);
+    const taskType = config.taskType || 'scrape';
+
+    // Monitor tasks don't use output-as-truth; set resume flag and restart
+    if (taskType.startsWith('monitor-')) {
+      config.resume = true;
+      db.prepare(`
+        UPDATE tasks SET status = ?, completed_at = ?, error = ?, config = ?
+        WHERE task_id = ?
+      `).run('pending', null, null, JSON.stringify(config), taskId);
+
+      WebSocketManager.emit(taskId, 'status', { status: 'pending' });
+
+      const result = await this.startTask(taskId);
+      return {
+        success: true,
+        message: `Resuming monitor task ${taskType} from checkpoint`,
+        ...result
+      };
+    }
 
     // ========== OUTPUT-AS-TRUTH: Count actual output records ==========
     // IPC script will scan output files itself to determine what to skip.
@@ -713,6 +751,35 @@ class TaskController {
       }
     }
     console.log(`[TaskController] Warning: Process ${pid} may still be alive after SIGKILL`);
+  }
+
+  /**
+   * Find the checkpoint file with the highest lastIndex in the output directory.
+   * Skips the excludePath file itself.
+   */
+  _findBestMonitorCheckpoint(excludePath) {
+    const outputDir = path.join(__dirname, '../../output');
+    if (!fs.existsSync(outputDir)) return null;
+
+    let bestPath = null;
+    let bestIndex = -1;
+
+    const files = fs.readdirSync(outputDir).filter(f => f.endsWith('.checkpoint.json'));
+    for (const file of files) {
+      const fullPath = path.join(outputDir, file);
+      if (fullPath === excludePath) continue;
+      try {
+        const data = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+        if (typeof data.lastIndex === 'number' && data.lastIndex > bestIndex) {
+          bestIndex = data.lastIndex;
+          bestPath = fullPath;
+        }
+      } catch {
+        // Skip invalid checkpoint files
+      }
+    }
+
+    return bestPath;
   }
 
   _buildCommandArgs(config, taskId, stateFile) {

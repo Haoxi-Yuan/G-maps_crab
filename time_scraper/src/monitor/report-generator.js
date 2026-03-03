@@ -35,7 +35,9 @@ class ReportGenerator {
     const summary = this._buildSummary(scan, changes);
     const report = {
       scanId: scan.scanId,
+      city: scan.city || null,
       startedAt: scan.startedAt,
+      baselineMilestoneAt: scan.baselineMilestoneAt || null,
       completedAt: scan.completedAt,
       summary,
       changes: changes.map(c => {
@@ -44,6 +46,8 @@ class ReportGenerator {
           placeId: c.placeId,
           url: `https://www.google.com/maps/place/?q=place_id:${navId}`,
           changeType: c.changeType,
+          previousMilestoneAt: c.previousMilestoneAt || scan.baselineMilestoneAt || null,
+          currentMilestoneAt: c.currentMilestoneAt || scan.startedAt || null,
           detectedAt: c.detectedAt
         };
         if (c.fields) {

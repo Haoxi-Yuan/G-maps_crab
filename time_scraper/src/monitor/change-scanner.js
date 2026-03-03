@@ -21,13 +21,27 @@ class ChangeScanner {
       path.join(__dirname, 'extract-poi-data.js'), 'utf8'
     );
     this.changeBatch = [];
+    this.city = null;
+    this.previousMilestoneAt = null;
+    this.currentMilestoneAt = null;
   }
 
+  /**
+   * Run the change scan.
+   * @param {Object} options
+   * @param {boolean} options.resume - Resume from checkpoint
+   * @param {number}  options.limit  - Max POIs to scan
+   * @param {string}  options.city   - City filter
+   * @param {Function} options.shouldContinue - Async callback checked before each batch.
+   *   Returns true to continue, false to stop gracefully. Used by IPC wrapper for pause/stop.
+   */
   async run(options = {}) {
     const startTime = Date.now();
+    this.city = options.city || null;
+    const shouldContinue = options.shouldContinue || (() => true);
 
     // Get all active POI IDs
-    const allPlaceIds = this.db.getAllActivePlaceIds();
+    const allPlaceIds = this.db.getAllActivePlaceIds(this.city);
     this.stats.total = options.limit
       ? Math.min(options.limit, allPlaceIds.length)
       : allPlaceIds.length;
@@ -39,7 +53,18 @@ class ChangeScanner {
       if (checkpoint) {
         startIndex = checkpoint.lastIndex + 1;
         this.scanId = checkpoint.scanId || this.scanId;
-        log('info', `Resuming scan ${this.scanId} from index ${startIndex}`);
+        this.city = checkpoint.city || this.city;
+        this.previousMilestoneAt = checkpoint.previousMilestoneAt || null;
+        this.currentMilestoneAt = checkpoint.currentMilestoneAt || null;
+        // Restore accumulated stats from checkpoint
+        if (checkpoint.stats) {
+          this.stats.scanned = checkpoint.stats.scanned || 0;
+          this.stats.changed = checkpoint.stats.changed || 0;
+          this.stats.failed = checkpoint.stats.failed || 0;
+          this.stats.gone = checkpoint.stats.gone || 0;
+          this.stats.newValues = checkpoint.stats.newValues || 0;
+        }
+        log('info', `Resuming scan ${this.scanId} from index ${startIndex} (scanned=${this.stats.scanned}, changed=${this.stats.changed})`);
       }
     }
 
@@ -56,10 +81,27 @@ class ChangeScanner {
 
     // Create scan record
     if (!options.resume || startIndex === 0) {
-      this.db.createScan(this.scanId, this.stats.total);
+      this.currentMilestoneAt = new Date().toISOString();
+      const previousScan = this.db.getLastCompletedScan(this.city);
+      this.previousMilestoneAt = previousScan
+        ? (previousScan.completedAt || previousScan.startedAt || null)
+        : null;
+      this.db.createScan(this.scanId, this.stats.total, {
+        city: this.city,
+        startedAt: this.currentMilestoneAt,
+        baselineMilestoneAt: this.previousMilestoneAt
+      });
+    } else {
+      const existingScan = this.db.getScanById(this.scanId);
+      if (existingScan) {
+        this.city = existingScan.city || this.city;
+        this.previousMilestoneAt = existingScan.baselineMilestoneAt || this.previousMilestoneAt;
+        this.currentMilestoneAt = existingScan.startedAt || this.currentMilestoneAt;
+      }
     }
 
-    log('info', `Scan ${this.scanId}: ${placeIds.length} POIs (index ${startIndex}-${endIndex - 1})`);
+    const cityLabel = this.city || 'ALL';
+    log('info', `Scan ${this.scanId}: city=${cityLabel}, ${placeIds.length} POIs (index ${startIndex}-${endIndex - 1})`);
 
     // Launch browser pool
     const { browsers: numBrowsers, tabsPerBrowser } = this.config.concurrency;
@@ -68,6 +110,7 @@ class ChangeScanner {
 
     const browserInstances = [];
     const tabPool = [];
+    let stoppedEarly = false;
 
     try {
       for (let b = 0; b < numBrowsers; b++) {
@@ -97,6 +140,13 @@ class ChangeScanner {
       // Process POIs using tab pool with controlled concurrency
       const batchSize = this.config.scan.batchSize;
       for (let i = 0; i < placeIds.length; i += batchSize) {
+        // Check if we should continue before each batch
+        if (!(await shouldContinue())) {
+          log('info', 'Scan interrupted by shouldContinue callback');
+          stoppedEarly = true;
+          break;
+        }
+
         const batch = placeIds.slice(i, Math.min(i + batchSize, placeIds.length));
         await this._processBatch(batch, tabPool);
 
@@ -110,6 +160,9 @@ class ChangeScanner {
         this.writeCheckpoint({
           lastIndex: startIndex + i + batch.length - 1,
           scanId: this.scanId,
+          city: this.city,
+          previousMilestoneAt: this.previousMilestoneAt,
+          currentMilestoneAt: this.currentMilestoneAt,
           stats: this.stats
         });
 
@@ -143,6 +196,16 @@ class ChangeScanner {
     if (this.changeBatch.length > 0) {
       this.db.insertChangeBatch(this.changeBatch);
       this.changeBatch = [];
+    }
+
+    if (stoppedEarly) {
+      // Don't delete checkpoint — scan was interrupted, can be resumed later
+      const duration = Date.now() - startTime;
+      this.stats.duration = duration;
+      this.stats.status = 'stopped';
+      log('info', `Scan stopped after ${formatDuration(duration)}`);
+      log('info', `Progress so far: scanned=${this.stats.scanned}, changed=${this.stats.changed}, failed=${this.stats.failed}, gone=${this.stats.gone}`);
+      return this.scanId;
     }
 
     // Complete scan
@@ -254,9 +317,12 @@ class ChangeScanner {
       if (detection.hasChanges) {
         this.changeBatch.push({
           scanId: this.scanId,
+          city: this.city,
           placeId,
           changeType: detection.changeType,
           fields: detection.changes,
+          previousMilestoneAt: this.previousMilestoneAt,
+          currentMilestoneAt: this.currentMilestoneAt,
           detectedAt: new Date().toISOString()
         });
         this.stats.changed++;
@@ -283,9 +349,12 @@ class ChangeScanner {
       this.db.markAsGone(placeId);
       this.changeBatch.push({
         scanId: this.scanId,
+        city: this.city,
         placeId,
         changeType: 'POI_GONE',
         fields: { reason, consecutiveFailures: poi.consecutiveFailures },
+        previousMilestoneAt: this.previousMilestoneAt,
+        currentMilestoneAt: this.currentMilestoneAt,
         detectedAt: new Date().toISOString()
       });
       this.stats.gone++;

@@ -60,7 +60,7 @@ export const Toggle = ({ label, checked, onChange, disabled }) => (
   </div>
 );
 
-export const Button = ({ children, variant = "primary", icon: Icon, className = "", onClick }) => {
+export const Button = ({ children, variant = "primary", icon: Icon, className = "", onClick, disabled = false }) => {
   const baseStyle = "flex items-center justify-center px-6 py-3 text-xs font-bold uppercase tracking-widest transition-all duration-300";
   const variants = {
     primary: "bg-zinc-100 text-zinc-950 hover:bg-white hover:shadow-[0_0_15px_rgba(255,255,255,0.1)]",
@@ -70,7 +70,11 @@ export const Button = ({ children, variant = "primary", icon: Icon, className = 
   };
 
   return (
-    <button onClick={onClick} className={`${baseStyle} ${variants[variant]} ${className}`}>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${baseStyle} ${variants[variant]} ${disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''} ${className}`}
+    >
       {Icon && <Icon className="w-4 h-4 mr-2" />}
       {children}
     </button>

@@ -74,6 +74,7 @@ class POIDiscovery {
       const batch = newIds.map(placeId => ({
         placeId,
         name: null,
+        city: cityName,
         reviewCount: null,
         rating: null,
         openingHoursHash: null,

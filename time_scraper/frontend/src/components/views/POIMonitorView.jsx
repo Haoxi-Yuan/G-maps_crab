@@ -1,40 +1,82 @@
-import React, { useState } from 'react';
-import { Radar, Play, Upload, Search, Download, ChevronRight, X, Clock, BarChart3, AlertCircle } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Radar, Play, Upload, Search, Download, ChevronRight, X, Clock, BarChart3, AlertCircle, Square, RotateCcw } from 'lucide-react';
 import { Card, SectionTitle, Label, Input, Button } from '../shared/UIComponents';
 import { useMonitor } from '../../hooks/useMonitor';
 import api from '../../services/api';
 
 export function POIMonitorView({ onTaskStarted }) {
   const {
-    stats, scans, changes, selectedScan, loading, toast,
-    startScan, startImport, startDiscover, selectScan, loadChanges, clearToast
+    stats, scans, changes, selectedScan, loading, toast, meta,
+    selectedCity, availableCities, setSelectedCity,
+    scanTask, checkpoint, checkpoints,
+    startScan, resumeScanTask, resumeFromCheckpoint, stopScanTask,
+    startImport, startDiscover, selectScan, loadChanges, clearToast
   } = useMonitor();
 
-  // Form state
   const [importSource, setImportSource] = useState('');
   const [importFormat, setImportFormat] = useState('auto');
   const [scanLimit, setScanLimit] = useState('');
-  const [scanResume, setScanResume] = useState(false);
-  const [discoverCity, setDiscoverCity] = useState('Singapore');
   const [discoverCategories, setDiscoverCategories] = useState('');
   const [discoverCellSize, setDiscoverCellSize] = useState('2000');
   const [discoverLimit, setDiscoverLimit] = useState('');
 
+  useEffect(() => {
+    if (!importSource && meta.defaultBaselineSource) {
+      setImportSource(meta.defaultBaselineSource);
+    }
+  }, [importSource, meta.defaultBaselineSource]);
+
+  const cityOptions = useMemo(() => {
+    const all = new Set(['ALL', selectedCity, meta.defaultCity, ...availableCities].filter(Boolean));
+    return Array.from(all);
+  }, [selectedCity, meta.defaultCity, availableCities]);
+
   async function handleStartScan() {
-    const config = {};
+    const config = { city: selectedCity || meta.defaultCity };
     if (scanLimit) config.limit = parseInt(scanLimit, 10);
-    if (scanResume) config.resume = true;
     const taskId = await startScan(config);
     if (taskId && onTaskStarted) onTaskStarted(taskId);
   }
 
+  async function handleResumeScan() {
+    const taskId = await resumeScanTask();
+    if (taskId && onTaskStarted) onTaskStarted(taskId);
+  }
+
+  async function handleResumeFromCheckpoint() {
+    const taskId = await resumeFromCheckpoint();
+    if (taskId && onTaskStarted) onTaskStarted(taskId);
+  }
+
+  const scanTaskResumable = scanTask && ['failed', 'stopped'].includes(scanTask.status);
+  const scanTaskRunning = scanTask && ['running', 'paused'].includes(scanTask.status);
+  const hasCheckpoints = checkpoints && checkpoints.length > 0;
+
   async function handleStartImport() {
     if (!importSource.trim()) return;
-    const taskId = await startImport({ source: importSource.trim(), format: importFormat });
+    const importCity = selectedCity === 'ALL' ? (meta.defaultCity || 'Singapore') : (selectedCity || meta.defaultCity);
+    const taskId = await startImport({
+      source: importSource.trim(),
+      format: importFormat,
+      city: importCity
+    });
+    if (taskId && onTaskStarted) onTaskStarted(taskId);
+  }
+
+  async function handleAutoImportDefault() {
+    if (!meta.defaultBaselineSource) return;
+    setImportSource(meta.defaultBaselineSource);
+    const importCity = selectedCity === 'ALL' ? (meta.defaultCity || 'Singapore') : (selectedCity || meta.defaultCity);
+    const taskId = await startImport({
+      source: meta.defaultBaselineSource,
+      format: 'auto',
+      city: importCity
+    });
     if (taskId && onTaskStarted) onTaskStarted(taskId);
   }
 
   async function handleStartDiscover() {
+    const discoverCity = selectedCity === 'ALL' ? (meta.defaultCity || 'Singapore') : (selectedCity || meta.defaultCity);
     const config = { city: discoverCity };
     if (discoverCategories.trim()) config.categories = discoverCategories.trim();
     if (discoverCellSize) config.cellSize = parseInt(discoverCellSize, 10);
@@ -49,7 +91,6 @@ export function POIMonitorView({ onTaskStarted }) {
 
   return (
     <div className="space-y-8">
-      {/* Toast notification */}
       {toast && (
         <div className={`flex items-center justify-between px-4 py-3 border ${
           toast.level === 'error' ? 'bg-red-950/30 border-red-900/50 text-red-400'
@@ -64,10 +105,24 @@ export function POIMonitorView({ onTaskStarted }) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Column 1 — Dashboard */}
         <div className="space-y-6">
           <Card>
-            <SectionTitle icon={BarChart3} title="Dashboard" description="POI database overview" />
+            <SectionTitle icon={BarChart3} title="Dashboard" description="POI database overview by city" />
+
+            <div className="mb-4">
+              <Label>City Scope</Label>
+              <div className="flex items-center space-x-2">
+                <select
+                  value={selectedCity || meta.defaultCity || 'Singapore'}
+                  onChange={e => setSelectedCity(e.target.value)}
+                  className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 text-zinc-300 text-sm"
+                >
+                  {cityOptions.map(city => (
+                    <option key={city} value={city}>{city === 'ALL' ? 'ALL (All Cities)' : city}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
             {!stats ? (
               <p className="text-zinc-600 text-sm">No data yet. Import a baseline to begin.</p>
@@ -92,10 +147,13 @@ export function POIMonitorView({ onTaskStarted }) {
                       <span className="text-zinc-500">Changes detected</span>
                       <span className="text-zinc-300">{stats.lastScan.changedCount}</span>
                     </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-zinc-500">Milestone window</span>
+                      <span className="text-zinc-300">{formatMilestone(stats.lastScan.baselineMilestoneAt, stats.lastScan.startedAt)}</span>
+                    </div>
                   </div>
                 )}
 
-                {/* Field coverage */}
                 {coverage.total > 0 && (
                   <div className="pt-3 border-t border-zinc-800 space-y-2">
                     <p className="text-xs text-zinc-500 uppercase tracking-wider">Field Coverage</p>
@@ -110,15 +168,14 @@ export function POIMonitorView({ onTaskStarted }) {
           </Card>
         </div>
 
-        {/* Column 2 — Operations */}
         <div className="space-y-6">
           <Card>
-            <SectionTitle icon={Upload} title="Import Baseline" description="Load POI data from scraper output" />
+            <SectionTitle icon={Upload} title="Import Baseline" description="Load city baseline from scraper output or sqlite DB" />
             <div className="space-y-3">
               <div>
                 <Label>Source path</Label>
                 <Input
-                  placeholder="/path/to/data or /path/to/file.ndjson"
+                  placeholder="/path/to/data.ndjson or /path/to/baseline.db"
                   value={importSource}
                   onChange={e => setImportSource(e.target.value)}
                 />
@@ -126,7 +183,7 @@ export function POIMonitorView({ onTaskStarted }) {
               <div>
                 <Label>Format</Label>
                 <div className="flex space-x-2">
-                  {['auto', 'old', 'new'].map(f => (
+                  {['auto', 'new', 'old', 'sqlite'].map(f => (
                     <button key={f} onClick={() => setImportFormat(f)}
                       className={`px-3 py-1.5 text-xs uppercase tracking-wider border ${
                         importFormat === f
@@ -137,36 +194,108 @@ export function POIMonitorView({ onTaskStarted }) {
                   ))}
                 </div>
               </div>
-              <Button icon={Upload} onClick={handleStartImport} className="w-full mt-2">
-                Import Baseline
-              </Button>
+              <div className="grid grid-cols-2 gap-2">
+                <Button icon={Upload} onClick={handleStartImport} className="w-full mt-2" disabled={loading || !importSource.trim()}>
+                  Import Baseline
+                </Button>
+                <Button icon={Upload} variant="secondary" onClick={handleAutoImportDefault} className="w-full mt-2" disabled={loading || !meta.defaultBaselineSource}>
+                  Auto Load Default
+                </Button>
+              </div>
+              {meta.defaultBaselineSource && (
+                <p className="text-xs text-zinc-600 break-all">Default: {meta.defaultBaselineSource}</p>
+              )}
             </div>
           </Card>
 
           <Card>
-            <SectionTitle icon={Radar} title="Run Scan" description="Detect changes in monitored POIs" />
+            <SectionTitle icon={Radar} title="Run Scan" description="Detect incremental changes against previous milestone" />
             <div className="space-y-3">
+              {/* Current scan task status */}
+              {scanTask && (
+                <div className={`px-3 py-2 border text-xs space-y-1 ${
+                  scanTaskRunning ? 'bg-blue-950/20 border-blue-900/50' :
+                  scanTaskResumable ? 'bg-amber-950/20 border-amber-900/50' :
+                  'bg-zinc-900 border-zinc-800'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400 font-mono">{scanTask.task_id?.slice(-12)}</span>
+                    <span className={`px-1.5 py-0.5 uppercase tracking-wider font-bold ${
+                      scanTask.status === 'running' ? 'text-blue-400' :
+                      scanTask.status === 'paused' ? 'text-yellow-400' :
+                      scanTask.status === 'failed' ? 'text-red-400' :
+                      scanTask.status === 'stopped' ? 'text-amber-400' :
+                      scanTask.status === 'completed' ? 'text-emerald-400' :
+                      'text-zinc-500'
+                    }`}>{scanTask.status}</span>
+                  </div>
+                  {scanTask.progress_current != null && scanTask.progress_total > 0 && (
+                    <div>
+                      <div className="flex justify-between text-zinc-500 mb-1">
+                        <span>{scanTask.progress_current?.toLocaleString()} / {scanTask.progress_total?.toLocaleString()}</span>
+                        <span>{Math.round((scanTask.progress_current / scanTask.progress_total) * 100)}%</span>
+                      </div>
+                      <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${Math.round((scanTask.progress_current / scanTask.progress_total) * 100)}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {scanTask.error && (
+                    <p className="text-red-400 truncate">{scanTask.error}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Available checkpoints from output directory */}
+              {hasCheckpoints && (
+                <div className="px-3 py-2 bg-zinc-900 border border-zinc-800 text-xs space-y-1">
+                  <p className="text-zinc-400 font-medium mb-1">Checkpoints on disk ({checkpoints.length})</p>
+                  {checkpoints.map((cp, i) => (
+                    <div key={cp.file} className={`flex items-center justify-between py-1 ${i > 0 ? 'border-t border-zinc-800' : ''}`}>
+                      <div className="text-zinc-500">
+                        <span className="text-zinc-400 font-mono">{cp.file?.replace('.checkpoint.json', '')}</span>
+                      </div>
+                      <div className="text-zinc-500">
+                        {cp.lastIndex?.toLocaleString()}/{cp.stats?.total?.toLocaleString()}
+                        {' '}({Math.round(((cp.lastIndex + 1) / (cp.stats?.total || 1)) * 100)}%)
+                        {' · '}{cp.stats?.scanned?.toLocaleString()} ok, {cp.stats?.changed?.toLocaleString()} chg
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div>
                 <Label>Limit (optional)</Label>
-                <Input type="number" placeholder="All POIs" value={scanLimit} onChange={e => setScanLimit(e.target.value)} />
+                <Input type="number" placeholder="All POIs in selected city" value={scanLimit} onChange={e => setScanLimit(e.target.value)} />
               </div>
-              <label className="flex items-center space-x-2 cursor-pointer">
-                <input type="checkbox" checked={scanResume} onChange={e => setScanResume(e.target.checked)}
-                  className="w-4 h-4 bg-zinc-950 border-zinc-700" />
-                <span className="text-zinc-400 text-sm">Resume from checkpoint</span>
-              </label>
-              <Button icon={Play} onClick={handleStartScan} className="w-full">
-                Start Scan
-              </Button>
+
+              {/* Action buttons based on task state */}
+              {scanTaskRunning ? (
+                <Button icon={Square} variant="secondary" onClick={stopScanTask} className="w-full" disabled={loading}>
+                  Stop Scan
+                </Button>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {(scanTaskResumable || hasCheckpoints) && (
+                    <Button icon={RotateCcw} onClick={scanTaskResumable ? handleResumeScan : handleResumeFromCheckpoint} className="w-full" disabled={loading}>
+                      Resume
+                    </Button>
+                  )}
+                  <Button icon={Play} variant={scanTaskResumable || hasCheckpoints ? 'secondary' : undefined} onClick={handleStartScan} className="w-full" disabled={loading || !selectedCity}>
+                    {scanTaskResumable || hasCheckpoints ? 'New Scan' : `Start Scan (${selectedCity || meta.defaultCity || 'City'})`}
+                  </Button>
+                </div>
+              )}
             </div>
           </Card>
 
           <Card>
-            <SectionTitle icon={Search} title="Discover POIs" description="Find new POIs via geographic search" />
+            <SectionTitle icon={Search} title="Discover POIs" description="Find new POIs for the selected city" />
             <div className="space-y-3">
               <div>
                 <Label>City</Label>
-                <Input value={discoverCity} onChange={e => setDiscoverCity(e.target.value)} />
+                <Input value={selectedCity || meta.defaultCity || ''} disabled />
               </div>
               <div>
                 <Label>Categories (comma-separated, optional)</Label>
@@ -182,17 +311,16 @@ export function POIMonitorView({ onTaskStarted }) {
                   <Input type="number" placeholder="No limit" value={discoverLimit} onChange={e => setDiscoverLimit(e.target.value)} />
                 </div>
               </div>
-              <Button icon={Search} variant="secondary" onClick={handleStartDiscover} className="w-full">
+              <Button icon={Search} variant="secondary" onClick={handleStartDiscover} className="w-full" disabled={loading || !selectedCity}>
                 Start Discovery
               </Button>
             </div>
           </Card>
         </div>
 
-        {/* Column 3 — History */}
         <div className="space-y-6">
           <Card>
-            <SectionTitle icon={Clock} title="Scan History" description="Past scans and detected changes" />
+            <SectionTitle icon={Clock} title="Scan History" description="Milestones for selected city" />
 
             {scans.length === 0 ? (
               <p className="text-zinc-600 text-sm">No scans yet.</p>
@@ -206,7 +334,8 @@ export function POIMonitorView({ onTaskStarted }) {
                   >
                     <div>
                       <span className="text-zinc-300 text-xs font-mono">{scan.scanId}</span>
-                      <div className="text-zinc-600 text-xs">{new Date(scan.startedAt).toLocaleDateString()}</div>
+                      <div className="text-zinc-600 text-xs">{formatDate(scan.startedAt)} • {scan.city || 'N/A'}</div>
+                      <div className="text-zinc-700 text-xs">{formatMilestone(scan.baselineMilestoneAt, scan.startedAt)}</div>
                     </div>
                     <div className="flex items-center space-x-3 text-xs">
                       <span className="text-zinc-500">{scan.scannedCount} scanned</span>
@@ -221,7 +350,6 @@ export function POIMonitorView({ onTaskStarted }) {
             )}
           </Card>
 
-          {/* Selected scan detail */}
           {selectedScan && (
             <Card>
               <div className="flex items-center justify-between mb-4">
@@ -229,6 +357,11 @@ export function POIMonitorView({ onTaskStarted }) {
                 <button onClick={() => selectScan(null)} className="text-zinc-600 hover:text-zinc-400">
                   <X className="w-4 h-4" />
                 </button>
+              </div>
+
+              <div className="mb-3 space-y-1 text-xs">
+                <div><span className="text-zinc-600">City: </span><span className="text-zinc-300">{selectedScan.city || 'N/A'}</span></div>
+                <div><span className="text-zinc-600">Milestone: </span><span className="text-zinc-300">{formatMilestone(selectedScan.baselineMilestoneAt, selectedScan.startedAt)}</span></div>
               </div>
 
               {selectedScan.summary && (
@@ -242,7 +375,6 @@ export function POIMonitorView({ onTaskStarted }) {
                 </div>
               )}
 
-              {/* Download buttons */}
               <div className="flex space-x-2">
                 <a href={api.getMonitorReportDownloadUrl(selectedScan.scanId)}
                   className="flex items-center space-x-1 px-3 py-1.5 text-xs bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-500 hover:text-zinc-200 transition-colors"
@@ -260,15 +392,17 @@ export function POIMonitorView({ onTaskStarted }) {
                 </a>
               </div>
 
-              {/* Changes list */}
               {selectedScan.changes && selectedScan.changes.length > 0 && (
                 <div className="mt-4 border-t border-zinc-800 pt-3 space-y-1 max-h-48 overflow-y-auto">
                   {selectedScan.changes.slice(0, 50).map((c, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs py-1 border-b border-zinc-900">
-                      <span className="text-zinc-400 font-mono truncate max-w-[140px]">{c.placeId}</span>
-                      <span className={`px-2 py-0.5 ${changeTypeColor(c.changeType)}`}>
-                        {c.changeType}
-                      </span>
+                    <div key={i} className="text-xs py-1 border-b border-zinc-900">
+                      <div className="flex items-center justify-between">
+                        <span className="text-zinc-400 font-mono truncate max-w-[140px]">{c.placeId}</span>
+                        <span className={`px-2 py-0.5 ${changeTypeColor(c.changeType)}`}>
+                          {c.changeType}
+                        </span>
+                      </div>
+                      <div className="text-zinc-700 mt-1">{formatMilestone(c.previousMilestoneAt, c.currentMilestoneAt)}</div>
                     </div>
                   ))}
                 </div>
@@ -276,23 +410,25 @@ export function POIMonitorView({ onTaskStarted }) {
             </Card>
           )}
 
-          {/* Recent changes stream */}
           <Card>
-            <SectionTitle title="Recent Changes" description="Latest detected changes across all scans" />
+            <SectionTitle title="Recent Changes" description="Latest detected changes in current city scope" />
             {changes.changes.length === 0 ? (
               <p className="text-zinc-600 text-sm">No changes detected yet.</p>
             ) : (
               <>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {changes.changes.map((c, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-zinc-900">
-                      <div className="flex items-center space-x-2 truncate">
-                        <span className="text-zinc-500 font-mono">{c.placeId?.slice(0, 12)}...</span>
-                        {c.name && <span className="text-zinc-400 truncate max-w-[100px]">{c.name}</span>}
+                    <div key={i} className="text-xs py-1.5 border-b border-zinc-900">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2 truncate">
+                          <span className="text-zinc-500 font-mono">{c.placeId?.slice(0, 12)}...</span>
+                          {c.name && <span className="text-zinc-400 truncate max-w-[100px]">{c.name}</span>}
+                        </div>
+                        <span className={`px-2 py-0.5 whitespace-nowrap ${changeTypeColor(c.changeType)}`}>
+                          {c.changeType}
+                        </span>
                       </div>
-                      <span className={`px-2 py-0.5 whitespace-nowrap ${changeTypeColor(c.changeType)}`}>
-                        {c.changeType}
-                      </span>
+                      <div className="text-zinc-700 mt-1">{formatMilestone(c.previousMilestoneAt, c.currentMilestoneAt)}</div>
                     </div>
                   ))}
                 </div>
@@ -300,13 +436,13 @@ export function POIMonitorView({ onTaskStarted }) {
                   <div className="flex items-center justify-center space-x-2 pt-3">
                     <button
                       disabled={changes.page <= 1}
-                      onClick={() => loadChanges(changes.page - 1)}
+                      onClick={() => loadChanges(changes.page - 1, selectedCity)}
                       className="px-3 py-1 text-xs text-zinc-500 border border-zinc-800 hover:border-zinc-600 disabled:opacity-30"
                     >Prev</button>
                     <span className="text-xs text-zinc-600">{changes.page} / {changes.totalPages}</span>
                     <button
                       disabled={changes.page >= changes.totalPages}
-                      onClick={() => loadChanges(changes.page + 1)}
+                      onClick={() => loadChanges(changes.page + 1, selectedCity)}
                       className="px-3 py-1 text-xs text-zinc-500 border border-zinc-800 hover:border-zinc-600 disabled:opacity-30"
                     >Next</button>
                   </div>
@@ -319,8 +455,6 @@ export function POIMonitorView({ onTaskStarted }) {
     </div>
   );
 }
-
-// --- Helper components ---
 
 function StatBlock({ label, value, small }) {
   return (
@@ -355,6 +489,19 @@ function MiniStat({ label, value }) {
       <span className="text-zinc-300 font-mono">{value ?? 0}</span>
     </div>
   );
+}
+
+function formatDate(value) {
+  if (!value) return 'N/A';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'N/A';
+  return date.toLocaleString();
+}
+
+function formatMilestone(previousAt, currentAt) {
+  const from = previousAt ? formatDate(previousAt) : 'initial baseline';
+  const to = currentAt ? formatDate(currentAt) : 'current scan';
+  return `${from} -> ${to}`;
 }
 
 function changeTypeColor(type) {

@@ -106,14 +106,31 @@ export default {
   }),
 
   // Monitor APIs
-  getMonitorStats: () => request('/monitor/stats'),
-  getMonitorScans: (limit) => request(`/monitor/scans${limit ? `?limit=${limit}` : ''}`),
+  getMonitorCheckpoint: () => request('/monitor/checkpoint'),
+  getMonitorMeta: () => request('/monitor/meta'),
+  getMonitorStats: (city) => request(`/monitor/stats${city ? `?city=${encodeURIComponent(city)}` : ''}`),
+  getMonitorScans: (limit, city) => {
+    const query = [
+      limit ? `limit=${encodeURIComponent(limit)}` : '',
+      city ? `city=${encodeURIComponent(city)}` : ''
+    ].filter(Boolean).join('&');
+    return request(`/monitor/scans${query ? `?${query}` : ''}`);
+  },
   getMonitorScanDetail: (scanId) => request(`/monitor/scans/${scanId}`),
-  getMonitorChanges: (page, limit) => request(`/monitor/changes?page=${page || 1}&limit=${limit || 50}`),
+  getMonitorChanges: (page, limit, city) => request(`/monitor/changes?${[
+    `page=${page || 1}`,
+    `limit=${limit || 50}`,
+    city ? `city=${encodeURIComponent(city)}` : ''
+  ].filter(Boolean).join('&')}`),
   startMonitorScan: (config) => request('/monitor/scan', { method: 'POST', body: JSON.stringify(config || {}) }),
   startMonitorImport: (config) => request('/monitor/import', { method: 'POST', body: JSON.stringify(config) }),
   startMonitorDiscover: (config) => request('/monitor/discover', { method: 'POST', body: JSON.stringify(config) }),
   getMonitorReport: (scanId) => request(`/monitor/report/${scanId}`),
   getMonitorReportDownloadUrl: (scanId) => `${API_BASE}/monitor/report/${scanId}/download`,
-  getMonitorPlaceIdsDownloadUrl: (scanId) => `${API_BASE}/monitor/report/${scanId}/placeids`
+  getMonitorPlaceIdsDownloadUrl: (scanId) => `${API_BASE}/monitor/report/${scanId}/placeids`,
+
+  // Monitor task management
+  getMonitorTasks: (status) => request(`/monitor/tasks${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  resumeMonitorTask: (taskId) => request(`/monitor/tasks/${taskId}/resume`, { method: 'POST' }),
+  stopMonitorTask: (taskId) => request(`/monitor/tasks/${taskId}/stop`, { method: 'POST' })
 };

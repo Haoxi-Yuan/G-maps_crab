@@ -37,9 +37,10 @@ const scanType = getArg('--scan-type') || 'scan';
 const limit = getArg('--limit') ? parseInt(getArg('--limit'), 10) : undefined;
 const resume = hasArg('--resume');
 const stateFile = getArg('--state-file');
+const checkpointOverride = getArg('--checkpoint');
 const source = getArg('--source');
 const format = getArg('--format') || 'auto';
-const city = getArg('--city') || 'Singapore';
+const city = getArg('--city');
 const categories = getArg('--categories');
 const cellSize = getArg('--cell-size') ? parseInt(getArg('--cell-size'), 10) : 2000;
 const headless = !hasArg('--no-headless');
@@ -111,9 +112,18 @@ process.on('SIGUSR1', () => {
 
 process.on('SIGTERM', () => {
   stopped = true;
+  state.status = 'stopped';
   ipcLog('info', 'Received SIGTERM, stopping gracefully...');
+  ipcStatus('stopped');
   addRecentLog('info', 'Received SIGTERM, stopping gracefully');
   writeState();
+  // Force exit after grace period — checkpoint is saved after each batch,
+  // so in-progress batch work is safely discardable.
+  setTimeout(() => {
+    ipcLog('info', 'Grace period elapsed, forcing exit');
+    writeState();
+    process.exit(0);
+  }, 5000);
 });
 
 // --- Pause check utility ---
@@ -126,7 +136,18 @@ async function waitWhilePaused() {
 
 // --- Main execution ---
 async function main() {
-  const config = loadConfig();
+  let config = loadConfig();
+
+  // Override checkpoint path with task-specific path if provided
+  if (checkpointOverride) {
+    const pathMod = require('path');
+    const projectRoot = pathMod.resolve(__dirname, '../..');
+    const cpAbsolute = pathMod.isAbsolute(checkpointOverride)
+      ? checkpointOverride
+      : pathMod.resolve(projectRoot, checkpointOverride);
+    config = { ...config, paths: { ...config.paths, checkpoint: cpAbsolute } };
+  }
+
   const db = new MonitorDB(config.paths.database);
 
   ipcLog('info', `Monitor scan starting: type=${scanType}`);
@@ -166,12 +187,42 @@ async function main() {
 
 // --- Change Scan ---
 async function runChangeScan(db, config) {
-  const allPlaceIds = db.getAllActivePlaceIds();
+  const scanCity = city || config.monitor?.defaultCity || 'Singapore';
+  const allPlaceIds = db.getAllActivePlaceIds(scanCity);
   const total = limit ? Math.min(limit, allPlaceIds.length) : allPlaceIds.length;
 
   state.progress.total = total;
-  state.stats = { scanned: 0, changed: 0, failed: 0, newPois: 0 };
-  ipcProgress(0, total, null);
+
+  // If resuming, read checkpoint to set initial progress immediately
+  // Use lastIndex as absolute progress (not scanned+failed which doesn't accumulate across sessions)
+  const scanner = new ChangeScanner(db, config);
+  let scannedSoFar = 0;
+  let progressOffset = 0; // offset to convert scanner stats → absolute progress
+
+  if (resume) {
+    const cp = scanner.readCheckpoint();
+    if (cp && cp.lastIndex > 0) {
+      // lastIndex is the absolute position — this is the true progress
+      const absoluteProgress = cp.lastIndex + 1;
+      const statsProcessed = (cp.stats?.scanned || 0) + (cp.stats?.failed || 0);
+      progressOffset = absoluteProgress - statsProcessed;
+      scannedSoFar = absoluteProgress;
+      state.progress.current = absoluteProgress;
+      state.stats = {
+        scanned: cp.stats?.scanned || 0,
+        changed: cp.stats?.changed || 0,
+        failed: cp.stats?.failed || 0,
+        gone: cp.stats?.gone || 0
+      };
+      ipcLog('info', `Resuming from checkpoint: ${absoluteProgress}/${total} (scanned=${state.stats.scanned}, changed=${state.stats.changed})`);
+    } else {
+      state.stats = { scanned: 0, changed: 0, failed: 0, gone: 0 };
+    }
+  } else {
+    state.stats = { scanned: 0, changed: 0, failed: 0, gone: 0 };
+  }
+
+  ipcProgress(state.progress.current || 0, total, null);
   ipcStats(state.stats);
   writeState();
 
@@ -180,20 +231,17 @@ async function runChangeScan(db, config) {
     return;
   }
 
-  // Use ChangeScanner but hook into its progress
-  const scanner = new ChangeScanner(db, config);
+  // shouldContinue callback: waits while paused, returns false when stopped
+  const shouldContinue = async () => {
+    await waitWhilePaused();
+    return !stopped;
+  };
 
-  // Override the original progress output with IPC messages
-  const origProcessBatch = scanner._processBatch.bind(scanner);
-  let scannedSoFar = 0;
-
-  // Monkey-patch the scan loop to add IPC + pause/stop support
-  const origRun = scanner.run.bind(scanner);
-
-  // We'll run the scanner directly but track progress via polling
+  // Track progress via polling
+  // Apply progressOffset so progress shows absolute position (not just current session stats)
   const progressPoll = setInterval(() => {
     const s = scanner.stats;
-    const current = s.scanned + s.failed;
+    const current = s.scanned + s.failed + progressOffset;
     if (current !== scannedSoFar) {
       scannedSoFar = current;
       state.progress.current = current;
@@ -205,7 +253,7 @@ async function runChangeScan(db, config) {
   }, 1000);
 
   try {
-    const scanId = await origRun({ resume, limit });
+    const scanId = await scanner.run({ resume, limit, city: scanCity, shouldContinue });
 
     clearInterval(progressPoll);
 
@@ -238,10 +286,11 @@ async function runChangeScan(db, config) {
 
 // --- POI Discovery ---
 async function runDiscovery(db, config) {
+  const discoverCity = city || config.monitor?.defaultCity || 'Singapore';
   const catList = categories ? categories.split(',').map(c => c.trim()) : undefined;
 
-  ipcLog('info', `Discovery starting: city=${city}, cellSize=${cellSize}`);
-  addRecentLog('info', `Discovery starting: city=${city}`);
+  ipcLog('info', `Discovery starting: city=${discoverCity}, cellSize=${cellSize}`);
+  addRecentLog('info', `Discovery starting: city=${discoverCity}`);
 
   state.stats = { totalFound: 0, newPois: 0 };
   ipcStats(state.stats);
@@ -249,7 +298,7 @@ async function runDiscovery(db, config) {
 
   const discovery = new POIDiscovery(db, config);
   const result = await discovery.run({
-    city,
+    city: discoverCity,
     categories: catList,
     cellSize,
     limit
@@ -267,6 +316,7 @@ async function runDiscovery(db, config) {
 
 // --- Baseline Import ---
 async function runImport(db, config) {
+  const importCity = city || config.monitor?.defaultCity || 'Singapore';
   if (!source) {
     throw new Error('--source is required for import scan type');
   }
@@ -279,7 +329,7 @@ async function runImport(db, config) {
   ipcStats(state.stats);
   writeState();
 
-  const result = await importBaseline(sourcePath, db, format);
+  const result = await importBaseline(sourcePath, db, format, { city: importCity });
 
   state.stats = {
     imported: result.imported,
