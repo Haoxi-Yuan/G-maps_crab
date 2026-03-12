@@ -8,7 +8,7 @@ const WebSocketManager = require('../services/WebSocketManager');
 const WATCHDOG_POLL_INTERVAL = 30000;           // 30 seconds
 const WATCHDOG_STUCK_THRESHOLD = 15 * 60 * 1000; // 15 minutes
 const WATCHDOG_MAX_AUTO_RECOVERIES = 3;
-const MAX_BROWSER_TASKS = 3; // Max concurrent browser tasks (search + scrape)
+const MAX_BROWSER_TASKS = 6; // Max concurrent browser tasks (search + scrape)
 
 class TaskController {
   constructor() {
@@ -800,6 +800,9 @@ class TaskController {
       if (config.format) args.push('--format', config.format);
       if (config.city) args.push('--city', config.city);
       if (config.categories) args.push('--categories', config.categories);
+      if (config.selectedCategories && Array.isArray(config.selectedCategories) && config.selectedCategories.length > 0) {
+        args.push('--select-categories', config.selectedCategories.join(','));
+      }
       if (config.cellSize) args.push('--cell-size', String(config.cellSize));
       if (config.headless === false) args.push('--no-headless');
       return args;
@@ -809,8 +812,12 @@ class TaskController {
       // Search-only: poi_search_ipc.js args
       args.push('--points', config.points);
       args.push('--categories', config.categories || 'config/categories.json');
+      if (config.selectedCategories && Array.isArray(config.selectedCategories) && config.selectedCategories.length > 0) {
+        args.push('--select-categories', config.selectedCategories.join(','));
+      }
       args.push('--output', config.output);
       if (config.searchZoom) args.push('--search-zoom', config.searchZoom);
+      if (config.maxSearchScrolls) args.push('--max-search-scrolls', String(config.maxSearchScrolls));
       if (config.headless) args.push('--headless');
       if (config.start !== undefined && config.start !== null) {
         args.push('--start', String(config.start));
@@ -825,7 +832,11 @@ class TaskController {
       args.push('--search-mode');
       args.push('--points', config.points);
       args.push('--categories', config.categories || 'config/categories.json');
+      if (config.selectedCategories && Array.isArray(config.selectedCategories) && config.selectedCategories.length > 0) {
+        args.push('--select-categories', config.selectedCategories.join(','));
+      }
       if (config.searchZoom) args.push('--search-zoom', config.searchZoom);
+      if (config.maxSearchScrolls) args.push('--max-search-scrolls', String(config.maxSearchScrolls));
     } else {
       args.push('--input', config.input);
     }

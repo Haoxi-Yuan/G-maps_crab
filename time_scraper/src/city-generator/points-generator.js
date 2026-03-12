@@ -102,7 +102,7 @@ class PointsGenerator {
    * @param {number} numPoints - Number of points to generate (optional)
    * @returns {Array} Array of point objects with {lat, lng}
    */
-  generate(numPoints = null) {
+  generate(numPoints = null, onProgress = null) {
     if (numPoints === null) {
       numPoints = this.calculateNumPoints();
     }
@@ -114,7 +114,7 @@ class PointsGenerator {
     console.log(`Generated ${initialPoints.length} initial random points`);
 
     // Step 2: Apply Lloyd relaxation
-    const relaxedPoints = this._lloydRelaxation(initialPoints);
+    const relaxedPoints = this._lloydRelaxation(initialPoints, onProgress);
     console.log(`Applied Lloyd relaxation (${this.options.lloydIterations} iterations)`);
 
     return relaxedPoints;
@@ -155,10 +155,13 @@ class PointsGenerator {
    * Apply Lloyd relaxation to make points more evenly distributed
    * @private
    */
-  _lloydRelaxation(points) {
+  _lloydRelaxation(points, onProgress = null) {
     let currentPoints = points;
 
     for (let iter = 0; iter < this.options.lloydIterations; iter++) {
+      if (onProgress) {
+        onProgress(iter + 1, this.options.lloydIterations);
+      }
       try {
         // Create Voronoi diagram
         const pointsCollection = turf.featureCollection(currentPoints);
@@ -180,35 +183,23 @@ class PointsGenerator {
           break;
         }
 
-        // Calculate centroids of Voronoi cells clipped by city boundary
+        // Move each point toward its Voronoi cell centroid, constrained to boundary
         const newPoints = [];
 
         for (let i = 0; i < voronoiPolygons.features.length; i++) {
           const voronoiCell = voronoiPolygons.features[i];
 
           try {
-            // Clip Voronoi cell with city boundary
-            const clipped = turf.intersect(
-              turf.featureCollection([voronoiCell, this.polygon])
-            );
+            // Use Voronoi cell centroid directly (fast, avoids expensive intersect)
+            const centroid = turf.centroid(voronoiCell);
 
-            if (clipped) {
-              // Use centroid of clipped cell
-              const centroid = turf.centroid(clipped);
-
-              // Ensure centroid is within boundary
-              if (turf.booleanPointInPolygon(centroid, this.polygon)) {
-                newPoints.push(centroid);
-              } else {
-                // If centroid is outside, keep original point
-                newPoints.push(currentPoints[i]);
-              }
+            // If centroid is inside boundary, use it; otherwise keep original
+            if (turf.booleanPointInPolygon(centroid, this.polygon)) {
+              newPoints.push(centroid);
             } else {
-              // If no intersection, keep original point
               newPoints.push(currentPoints[i]);
             }
           } catch (e) {
-            // If any error occurs, keep original point
             newPoints.push(currentPoints[i]);
           }
         }

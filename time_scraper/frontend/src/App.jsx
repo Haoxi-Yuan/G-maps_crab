@@ -101,6 +101,21 @@ export default function App() {
     setActiveTab('config');
   }
 
+  function handleStartSearchDirect({ pointsFile, searchZoom, maxSearchScrolls, categories, selectedCategories }) {
+    handleStartTask({
+      taskType: 'search',
+      mode: 'search',
+      points: pointsFile,
+      categories: categories || 'config/categories.json',
+      selectedCategories: selectedCategories && selectedCategories.length > 0 ? selectedCategories : undefined,
+      searchZoom: searchZoom || '1000m',
+      maxSearchScrolls: maxSearchScrolls || 15,
+      output: `output/${pointsFile.split('/').pop().replace(/\.[^.]+$/, '')}.search_results.json`,
+      headless: true,
+      randomDelay: true
+    });
+  }
+
   const tabs = [
     { id: 'generator', label: 'City Generator', icon: MapPin },
     { id: 'config', label: 'Scraper Config', icon: Settings },
@@ -177,7 +192,7 @@ export default function App() {
       </div>
 
       <main className="max-w-7xl mx-auto px-6 py-8">
-        {activeTab === 'generator' && <GeneratorView onStartSearch={handleStartSearchFromGenerator} />}
+        {activeTab === 'generator' && <GeneratorView onStartSearch={handleStartSearchFromGenerator} onStartSearchDirect={handleStartSearchDirect} />}
         {activeTab === 'config' && <ScraperConfigView onStart={handleStartTask} prefillPointsFile={prefillPointsFile} onPrefillConsumed={() => setPrefillPointsFile(null)} />}
         {activeTab === 'monitor' && <MonitorView taskId={currentTaskId} onTaskDeleted={handleTaskDeleted} onSwitchTask={setCurrentTaskId} />}
         {activeTab === 'poi-monitor' && <POIMonitorView onTaskStarted={(taskId) => { setCurrentTaskId(taskId); setActiveTab('monitor'); loadRunningInstances(); }} />}

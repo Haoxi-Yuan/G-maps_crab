@@ -63,6 +63,8 @@ export default {
 
   previewFile: (path) => request(`/files/preview?path=${encodeURIComponent(path)}`),
 
+  getCategories: () => request('/files/categories'),
+
   // Parallel splitting APIs
   countItems: (filePath, mode) => request('/files/count-items', {
     method: 'POST',
@@ -89,11 +91,45 @@ export default {
     method: 'DELETE'
   }),
 
-  // City generator APIs
-  generateCity: (params) => request('/generator/generate', {
-    method: 'POST',
-    body: JSON.stringify(params)
-  }),
+  // City generator APIs (SSE streaming)
+  generateCity: (params, onProgress) => {
+    const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
+    return new Promise((resolve, reject) => {
+      fetch(`${API_BASE_URL}/generator/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      }).then(response => {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        function read() {
+          reader.read().then(({ done, value }) => {
+            if (done) return;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              try {
+                const evt = JSON.parse(line.slice(6));
+                if (evt.type === 'progress' && onProgress) {
+                  onProgress(evt);
+                } else if (evt.type === 'complete') {
+                  resolve(evt);
+                } else if (evt.type === 'error') {
+                  reject(new Error(evt.message));
+                }
+              } catch {}
+            }
+            read();
+          }).catch(reject);
+        }
+        read();
+      }).catch(reject);
+    });
+  },
 
   getGeneratorData: (cityDir) => request(`/generator/data/${encodeURIComponent(cityDir)}`),
 

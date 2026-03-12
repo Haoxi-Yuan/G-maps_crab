@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 
 const BoundaryGenerator = require('../../src/city-generator/boundary-generator');
+const BoundaryPreprocessor = require('../../src/city-generator/boundary-preprocessor');
 const PointsGenerator = require('../../src/city-generator/points-generator');
 
 const router = express.Router();
@@ -11,21 +12,51 @@ const PROJECT_ROOT = path.join(__dirname, '../..');
 
 /**
  * POST /api/generator/generate
- * Generate city boundary + sampling points
+ * Generate city boundary + sampling points (SSE streaming with progress)
  */
 router.post('/generate', async (req, res) => {
-  try {
-    const { cityName, cellSize = 2000, lloydIterations = 10, bbox } = req.body;
+  const { cityName, cellSize = 2000, lloydIterations = 10, bbox, boundaryFile } = req.body;
 
-    if (!cityName) {
-      return res.status(400).json({ success: false, message: 'cityName is required' });
+  if (!cityName) {
+    return res.status(400).json({ success: false, message: 'cityName is required' });
+  }
+
+  // Set up SSE
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  function sendProgress(step, message, percent) {
+    res.write(`data: ${JSON.stringify({ type: 'progress', step, message, percent })}\n\n`);
+  }
+
+  try {
+    let boundary;
+
+    if (boundaryFile) {
+      // Load and preprocess local boundary file
+      sendProgress(1, 'Loading local boundary file...', 10);
+      const filePath = path.resolve(PROJECT_ROOT, boundaryFile);
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`Boundary file not found: ${boundaryFile}`);
+      }
+      const rawGeojson = JSON.parse(await fsPromises.readFile(filePath, 'utf8'));
+      sendProgress(1, 'Preprocessing boundary (CRS conversion + polygon assembly)...', 15);
+      boundary = await BoundaryPreprocessor.preprocess(rawGeojson);
+      sendProgress(1, 'Boundary preprocessed successfully', 30);
+    } else {
+      // Fetch boundary from Overpass API
+      sendProgress(1, 'Fetching city boundary from Overpass API...', 10);
+      const boundaryGen = new BoundaryGenerator();
+      boundary = await boundaryGen.fetchCityBoundary(cityName, { bbox });
+      sendProgress(1, 'Boundary fetched successfully', 30);
     }
 
-    // Step 1: Fetch boundary from Overpass API
-    const boundaryGen = new BoundaryGenerator();
-    const boundary = await boundaryGen.fetchCityBoundary(cityName, { bbox });
-
     // Step 2: Generate sampling points
+    sendProgress(2, 'Initializing point generator...', 35);
     const pointsGen = new PointsGenerator(boundary, {
       cellSize,
       lloydIterations,
@@ -33,9 +64,17 @@ router.post('/generate', async (req, res) => {
     });
     await pointsGen.init();
     const numPoints = pointsGen.calculateNumPoints();
-    const points = pointsGen.generate(numPoints);
+    sendProgress(2, `Generating ${numPoints} sampling points...`, 40);
 
-    // Step 3: Save files (same format as CLI)
+    // Generate with progress callback
+    const points = pointsGen.generate(numPoints, (iterDone, iterTotal) => {
+      const iterPercent = 40 + Math.round((iterDone / iterTotal) * 40);
+      sendProgress(2, `Lloyd relaxation: iteration ${iterDone}/${iterTotal}`, iterPercent);
+    });
+    sendProgress(2, `Generated ${points.length} points`, 80);
+
+    // Step 3: Save files
+    sendProgress(3, 'Saving output files...', 85);
     const sanitizedName = cityName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '_')
@@ -43,20 +82,16 @@ router.post('/generate', async (req, res) => {
     const outputDir = path.join(PROJECT_ROOT, 'data', sanitizedName);
     await fsPromises.mkdir(outputDir, { recursive: true });
 
-    // Boundary GeoJSON
     const boundaryPath = path.join(outputDir, `${sanitizedName}_boundary.geojson`);
     await fsPromises.writeFile(boundaryPath, JSON.stringify(boundary, null, 2));
 
-    // Points JSON
     const jsonPath = path.join(outputDir, `${sanitizedName}_points.json`);
     await fsPromises.writeFile(jsonPath, JSON.stringify(points, null, 2));
 
-    // Points CSV
     const csvPath = path.join(outputDir, `${sanitizedName}_points.csv`);
     const csvContent = 'latitude,longitude\n' + points.map(p => `${p.lat},${p.lng}`).join('\n');
     await fsPromises.writeFile(csvPath, csvContent);
 
-    // Points GeoJSON
     const { getTurf } = require('../../src/city-generator/turf-loader');
     const turf = await getTurf();
     const features = points.map(p => turf.point([p.lng, p.lat]));
@@ -64,7 +99,8 @@ router.post('/generate', async (req, res) => {
     const geojsonPath = path.join(outputDir, `${sanitizedName}_points.geojson`);
     await fsPromises.writeFile(geojsonPath, JSON.stringify(pointsGeojson, null, 2));
 
-    // Summary
+    sendProgress(3, 'Computing summary...', 90);
+
     let polygon = boundary.features?.[0];
     const area = polygon ? turf.area(polygon) : 0;
     const bboxResult = polygon ? turf.bbox(polygon) : [0, 0, 0, 0];
@@ -91,8 +127,10 @@ router.post('/generate', async (req, res) => {
     const summaryPath = path.join(outputDir, `${sanitizedName}_summary.json`);
     await fsPromises.writeFile(summaryPath, JSON.stringify(summary, null, 2));
 
-    res.json({
-      success: true,
+    // Send final result
+    res.write(`data: ${JSON.stringify({
+      type: 'complete',
+      percent: 100,
       data: {
         boundary,
         points,
@@ -100,10 +138,12 @@ router.post('/generate', async (req, res) => {
         outputDir: `data/${sanitizedName}`,
         pointsFile: `data/${sanitizedName}/${sanitizedName}_points.csv`
       }
-    });
+    })}\n\n`);
+    res.end();
   } catch (error) {
     console.error('[Generator] Error:', error.message);
-    res.status(500).json({ success: false, message: error.message });
+    res.write(`data: ${JSON.stringify({ type: 'error', message: error.message })}\n\n`);
+    res.end();
   }
 });
 

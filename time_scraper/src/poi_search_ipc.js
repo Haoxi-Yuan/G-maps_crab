@@ -151,6 +151,7 @@ function parseArgs(argv) {
       case '--limit': opts.limit = parseInt(argv[++i]); break;
       case '--lang': case '--hl': opts.lang = argv[++i]; break;
       case '--checkpoint': opts.checkpoint = argv[++i]; break;
+      case '--select-categories': opts.selectCategories = argv[++i]; break;
     }
   }
 
@@ -209,8 +210,16 @@ async function main() {
 
   ipcLog('info', `Processing ${points.length} points`);
 
-  const categories = poiSearcher.loadCategories(opts.categoriesFile);
-  ipcLog('info', `Loaded ${categories.length} categories`);
+  let categories = poiSearcher.loadCategories(opts.categoriesFile);
+  if (opts.selectCategories) {
+    const selected = new Set(opts.selectCategories.split(',').map(s => s.trim().toLowerCase()));
+    categories = categories.filter(c => selected.has(c.toLowerCase()));
+    ipcLog('info', `Category filter applied: ${categories.length} selected from ${opts.selectCategories}`);
+    if (categories.length === 0) {
+      throw new Error('No matching categories found after filtering. Check --select-categories values.');
+    }
+  }
+  ipcLog('info', `Using ${categories.length} categories`);
 
   // Check if search was already completed
   if (fs.existsSync(opts.outputFile)) {

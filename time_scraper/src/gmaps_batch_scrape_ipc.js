@@ -434,6 +434,7 @@ function parseArgs(argv) {
     else if (arg === '--search-zoom') opts.searchZoom = argv[++i];
     else if (arg === '--max-search-scrolls') opts.maxSearchScrolls = parseInt(argv[++i], 10);
     else if (arg === '--search-delay') opts.searchDelay = parseInt(argv[++i], 10);
+    else if (arg === '--select-categories') opts.selectCategories = argv[++i];
     else if (arg === '--no-save-search-results') opts.saveSearchResults = false;
     else if (arg === '--search-results') opts.searchResultsFile = argv[++i];
     else if (arg === '--review-sort') {
@@ -476,6 +477,9 @@ function parseArgs(argv) {
   return opts;
 }
 
+// Global map: placeId → direct Google Maps link (populated by loadPlaceIds)
+const _placeIdToLink = new Map();
+
 function loadPlaceIds(filePath) {
   const content = fs.readFileSync(filePath, 'utf8').trim();
   if (!content) return [];
@@ -487,7 +491,14 @@ function loadPlaceIds(filePath) {
       return data
         .map(item => {
           if (typeof item === 'string') return item.trim();
-          if (item && typeof item === 'object') return item.place_id || item.placeId || null;
+          if (item && typeof item === 'object') {
+            const id = item.place_id || item.placeId || null;
+            // Store direct link if available (used instead of place_id: query)
+            if (id && (item.google_maps_link || item.link)) {
+              _placeIdToLink.set(id, item.google_maps_link || item.link);
+            }
+            return id;
+          }
           return null;
         })
         .filter(Boolean);
@@ -506,7 +517,12 @@ function loadPlaceIds(filePath) {
       try {
         const obj = JSON.parse(line);
         const id = obj.place_id || obj.placeId;
-        if (id) ids.push(id);
+        if (id) {
+          ids.push(id);
+          if (obj.google_maps_link || obj.link) {
+            _placeIdToLink.set(id, obj.google_maps_link || obj.link);
+          }
+        }
       } catch (err) {
         // Skip
       }
@@ -1075,8 +1091,16 @@ async function main() {
         points = points.slice(0, opts.limit);
       }
 
-      const categories = poiSearcher.loadCategories(opts.categoriesFile);
-      ipcLog('info', `Loaded ${categories.length} categories`);
+      let categories = poiSearcher.loadCategories(opts.categoriesFile);
+      if (opts.selectCategories) {
+        const selected = new Set(opts.selectCategories.split(',').map(s => s.trim().toLowerCase()));
+        categories = categories.filter(c => selected.has(c.toLowerCase()));
+        ipcLog('info', `Category filter applied: ${categories.length} selected from ${opts.selectCategories}`);
+        if (categories.length === 0) {
+          throw new Error('No matching categories found after filtering. Check --select-categories values.');
+        }
+      }
+      ipcLog('info', `Using ${categories.length} categories`);
 
       const { chromium } = require('playwright');
       const searchBrowser = await chromium.launch({

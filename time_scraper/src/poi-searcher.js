@@ -72,7 +72,9 @@ function createSearchLink(query, lat, lng, zoom = SEARCH_CONFIG.defaultZoom, lan
   });
 
   // 构建坐标字符串: @lat,lng,zoom (无空格)
-  const geoStr = `/@${removeSpaces(`${lat},${lng}`)},${zoom}`;
+  // Ensure zoom has a unit suffix (e.g. "1000m" or "14z"); bare numbers default to meters
+  const zoomStr = /^\d+$/.test(String(zoom)) ? `${zoom}m` : String(zoom);
+  const geoStr = `/@${removeSpaces(`${lat},${lng}`)},${zoomStr}`;
 
   // 完整URL
   const url = `https://www.google.com/maps/search/${endpoint}${geoStr}?${params.toString()}`;
@@ -140,13 +142,19 @@ function getPlaceId(data) {
  */
 function extractPlaceIdFromUrl(url) {
   try {
-    // 方法1: 从data参数中提取 (格式: !1s{place_id})
+    // 方法1: 优先提取ChIJ格式 (从!19s参数，可直接用于place_id:查询)
+    const chijMatch = url.match(/!19s(ChIJ[^!?&]+)/);
+    if (chijMatch && chijMatch[1]) {
+      return decodeURIComponent(chijMatch[1]);
+    }
+
+    // 方法2: 从data参数中提取 (格式: !1s{place_id})
     const dataMatch = url.match(/!1s([A-Za-z0-9_-]+)/);
     if (dataMatch && dataMatch[1]) {
       return dataMatch[1];
     }
 
-    // 方法2: 从ftid参数提取
+    // 方法3: 从ftid参数提取
     const ftidMatch = url.match(/ftid=([A-Za-z0-9_:-]+)/);
     if (ftidMatch && ftidMatch[1]) {
       return ftidMatch[1];

@@ -149,4 +149,18 @@ router.post('/count-items', async (req, res) => {
   }
 });
 
+// GET /files/categories — Return available POI categories from config
+router.get('/categories', async (req, res) => {
+  try {
+    const basePath = path.join(__dirname, '../..');
+    const configPath = path.join(basePath, 'config', 'categories.json');
+    const content = await fs.readFile(configPath, 'utf8');
+    const data = JSON.parse(content);
+    const categories = Array.isArray(data) ? data : (data.categories || []);
+    res.json({ success: true, categories });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 module.exports = router;
