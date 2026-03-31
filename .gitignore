@@ -40,5 +40,12 @@ Thumbs.db
 *.bak
 *.pre_truncate
 
-# === Frontend build ===
+# === Frontend build & cache ===
 time_scraper/frontend/dist/
+time_scraper/frontend/.vite/
+
+# === Database ===
+*.sqlite
+
+# === Workspace ===
+*.code-workspace
