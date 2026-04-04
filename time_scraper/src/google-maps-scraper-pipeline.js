@@ -315,6 +315,8 @@
         for (const value of values || []) {
             const parsed = parseReviewCountString(value);
             if (parsed === null) continue;
+            // Sanity cap: no single place has > 10 million reviews
+            if (parsed > 10000000) continue;
             if (best === null || parsed > best) {
                 best = parsed;
             }
@@ -959,11 +961,17 @@
         });
         console.log('  Found:', rawData._raw.ratings.length, 'candidates');
 
-        // 8. Extract review counts
+        // 8. Extract review counts (locale-independent)
         console.log('Searching review counts...');
         rawData._raw.reviewCounts = deepSearchFirstAvailable(searchRoots, (obj) => {
             if (typeof obj !== 'string') return false;
-            return /^[\d,]+\s*reviews?$/i.test(obj);
+            // Match "123 reviews", "1,234 reseñas", "456 avis", "789 Bewertungen", etc.
+            // Pattern: digits (with comma/dot separators) + space + word(s)
+            // Must have at least one word after the number to avoid matching bare IDs/timestamps
+            if (!/^[\d][.\d,]*\s+\S+$/i.test(obj)) return false;
+            // Sanity: the numeric part should be a plausible review count (< 10M)
+            const digits = obj.replace(/[^\d]/g, '');
+            return digits.length >= 1 && digits.length <= 7 && obj.length < 40;
         });
         console.log('  Found:', rawData._raw.reviewCounts.length, 'candidates');
 
@@ -1238,25 +1246,46 @@
             }
         }
 
-        // Try to get rating from DOM
-        const ratingSpan = document.querySelector('[role="img"][aria-label*="star"]');
+        // Try to get rating from DOM (locale-independent: extract first decimal number from aria-label)
+        const ratingSpan = document.querySelector('[role="img"][aria-label]');
         if (ratingSpan) {
-            const match = (ratingSpan.getAttribute('aria-label') || '').match(/([\d.]+)\s*star/i);
+            const ariaLabel = ratingSpan.getAttribute('aria-label') || '';
+            // Extract any decimal number between 1.0 and 5.0 (works across all locales)
+            const match = ariaLabel.match(/([\d][.,][\d])/);
             if (match) {
-                cleaned.business.rating = parseFloat(match[1]);
-                console.log('Rating from DOM:', cleaned.business.rating);
+                const rating = parseFloat(match[1].replace(',', '.'));
+                if (rating >= 1.0 && rating <= 5.0) {
+                    cleaned.business.rating = rating;
+                    console.log('Rating from DOM:', cleaned.business.rating);
+                }
             }
         }
 
-        // Try to get review count from DOM
-        const reviewBtn = document.querySelector('button[jsaction*="pane.reviewChart.moreReviews"], button[aria-label*="review"]');
-        if (reviewBtn) {
-            const label = reviewBtn.getAttribute('aria-label') || reviewBtn.textContent;
-            const value = parseReviewCountString(label);
-            if (value !== null) {
-                cleaned.business.reviewCount = value;
-                console.log('Review count from DOM:', cleaned.business.reviewCount);
+        // Try to get review count from DOM (locale-independent)
+        // Strategy: check multiple selectors, extract first number found
+        const reviewCountSelectors = [
+            'button[jsaction*="pane.reviewChart.moreReviews"]',
+            'button[aria-label*="review"]',
+            'button[aria-label*="reseña"]',   // Spanish
+            'button[aria-label*="avis"]',      // French
+            'button[aria-label*="Bewertung"]', // German
+            'button[aria-label*="レビュー"]',   // Japanese
+            'button[aria-label*="评论"]',       // Chinese
+            // Fallback: tab buttons containing a number (Reviews tab)
+            'button[role="tab"]',
+        ];
+        for (const sel of reviewCountSelectors) {
+            const btns = document.querySelectorAll(sel);
+            for (const btn of btns) {
+                const label = btn.getAttribute('aria-label') || btn.textContent || '';
+                const value = parseReviewCountString(label);
+                if (value !== null && value > 0) {
+                    cleaned.business.reviewCount = value;
+                    console.log('Review count from DOM:', cleaned.business.reviewCount);
+                    break;
+                }
             }
+            if (cleaned.business.reviewCount) break;
         }
 
         // Try to get categories from DOM

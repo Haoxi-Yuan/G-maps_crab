@@ -3,7 +3,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const stealth = require('./stealth');
 const ReviewImageDownloader = require('./review_image_downloader');
+const { fetchAllReviews } = require('./api-review-fetcher');
 const {
     createResponseHandler,
     applyTimestampsToReviews
@@ -14,70 +16,33 @@ const {
 // ============================================
 
 const ANTI_DETECTION = {
-  // 代理列表 (从配置文件加载)
-  proxies: [],
-
-  // 随机延迟范围 (毫秒)
   delayRange: { min: 1000, max: 10000 },
-
-  // 滚动随机延迟
   scrollDelayRange: { min: 100, max: 500 },
-
-  // User-Agent 池
-  userAgents: [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
-  ],
-
-  // 视口大小选项
-  viewportSizes: [
-    { width: 1920, height: 1080 },
-    { width: 1366, height: 768 },
-    { width: 1536, height: 864 },
-    { width: 1440, height: 900 }
-  ],
-
-  // CAPTCHA 检测选择器
   captchaSelectors: [
     'iframe[src*="recaptcha"]',
     '[id*="captcha"]',
     '[class*="captcha"]'
   ],
-
-  // 地理位置配置 (根据代理位置自动适配)
   geoLocations: {
     'US': { timezone: 'America/New_York', locale: 'en-US', languages: ['en-US', 'en'] },
     'SG': { timezone: 'Asia/Singapore', locale: 'en-SG', languages: ['en-SG', 'en'] },
     'UK': { timezone: 'Europe/London', locale: 'en-GB', languages: ['en-GB', 'en'] },
     'JP': { timezone: 'Asia/Tokyo', locale: 'ja-JP', languages: ['ja-JP', 'ja', 'en'] },
-    'DE': { timezone: 'Europe/Berlin', locale: 'de-DE', languages: ['de-DE', 'de', 'en'] }
+    'DE': { timezone: 'Europe/Berlin', locale: 'de-DE', languages: ['de-DE', 'de', 'en'] },
+    'ES': { timezone: 'Europe/Madrid', locale: 'es-ES', languages: ['es-ES', 'es', 'en'] },
+    'FR': { timezone: 'Europe/Paris', locale: 'fr-FR', languages: ['fr-FR', 'fr', 'en'] },
+    'CN': { timezone: 'Asia/Shanghai', locale: 'zh-CN', languages: ['zh-CN', 'zh', 'en'] },
   },
-
-  // 软阻塞检测关键词
-  softBlockIndicators: [
-    'popular times',
-    'opening hours',
-    'reviews'
-  ],
-
-  // 软阻断检测选择器 (只检测内容区域/左侧的登录提示,排除右上角导航栏)
+  softBlockIndicators: ['popular times', 'opening hours', 'reviews'],
   softBlockSelectors: [
-    // 主内容区域的登录提示 (通常在左侧面板或中心区域)
     '[role="main"] a:has-text("Sign in")',
     '[role="main"] button:has-text("Sign in")',
     '.section-layout a:has-text("Sign in")',
     '.section-layout button:has-text("Sign in")',
-    // 地点详情面板中的登录提示
     '[class*="place"] a:has-text("Sign in")',
     '[class*="place"] button:has-text("Sign in")',
-    // 侧边栏中的登录提示
     '[data-is-touch-wrapper="true"]:not([class*="header"]) a[href*="accounts.google.com"]',
-    // 排除导航栏,只匹配内容区域
     'div[role="dialog"] a:has-text("Sign in")',
-    // 中文版本
     '[role="main"] a:has-text("登录")',
     '[role="main"] button:has-text("登录")'
   ]
@@ -365,71 +330,8 @@ function writeCheckpoint(filePath, data) {
   }
 }
 
-function getBlockedResourceTypes() {
-  return new Set(['image', 'media', 'font']);
-}
-
-async function enableResourceBlocking(context, opts) {
-  if (!opts.blockResources) return;
-  const blockedTypes = getBlockedResourceTypes();
-  await context.route('**/*', route => {
-    const resourceType = route.request().resourceType();
-    if (blockedTypes.has(resourceType)) {
-      return route.abort();
-    }
-    return route.continue();
-  });
-}
-
-// ============================================
-// Proxy Manager 代理管理器
-// ============================================
-
-class ProxyManager {
-  constructor(proxies, geoTarget = null) {
-    this.proxies = proxies || [];
-    this.currentIndex = 0;
-    this.failedProxies = new Set();
-    this.geoTarget = geoTarget;
-
-    // 如果设置了地理目标，过滤代理
-    if (geoTarget && this.proxies.length > 0) {
-      this.proxies = this.proxies.filter(p =>
-        !p.country || p.country.toUpperCase() === geoTarget.toUpperCase()
-      );
-      console.log(`[PROXY] Filtered to ${this.proxies.length} proxies for geo-target: ${geoTarget}`);
-    }
-  }
-
-  hasProxies() {
-    return this.proxies.length > 0;
-  }
-
-  getCurrentProxy() {
-    if (!this.hasProxies()) return null;
-    return this.proxies[this.currentIndex];
-  }
-
-  rotateProxy() {
-    if (!this.hasProxies()) return null;
-    this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
-
-    // 跳过失败的代理
-    let attempts = 0;
-    while (this.failedProxies.has(JSON.stringify(this.getCurrentProxy())) && attempts < this.proxies.length) {
-      this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
-      attempts++;
-    }
-
-    console.log(`[PROXY] Switching proxy: ${this.getCurrentProxy()?.server || 'none'}`);
-    return this.getCurrentProxy();
-  }
-
-  markFailed(proxy) {
-    this.failedProxies.add(JSON.stringify(proxy));
-    console.warn(`[PROXY] Proxy failed: ${proxy.server}`);
-  }
-}
+// Resource blocking and ProxyManager now provided by stealth module
+// See: ./stealth/resource-blocker.js, ./stealth/proxy-rotator.js
 
 // ============================================
 // CAPTCHA Solver 验证码解决器
@@ -542,49 +444,7 @@ async function detectCaptcha(page) {
   return false;
 }
 
-async function applyStealth(context) {
-  // 注入 Stealth 脚本隐藏自动化指纹
-  await context.addInitScript(() => {
-    // 覆盖 navigator.webdriver
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined
-    });
-
-    // 覆盖 plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5]
-    });
-
-    // 覆盖 languages
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en']
-    });
-
-    // 添加 chrome runtime
-    window.chrome = { runtime: {} };
-
-    // 修复 permissions
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters) => (
-      parameters.name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission }) :
-        originalQuery(parameters)
-    );
-
-    // 随机化 canvas 指纹
-    const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(...args) {
-      const context = this.getContext('2d');
-      if (context) {
-        const imageData = context.getImageData(0, 0, this.width, this.height);
-        for (let i = 0; i < imageData.data.length; i += 4) {
-          imageData.data[i] += Math.floor(Math.random() * 3) - 1;
-        }
-      }
-      return originalToDataURL.apply(this, args);
-    };
-  });
-}
+// applyStealth now provided by stealth module — see ./stealth/apply-stealth.js
 
 async function simulateMouseMovement(page) {
   // 模拟人类鼠标移动轨迹
@@ -925,14 +785,14 @@ async function main() {
   // 初始化高级功能模块
   // ============================================
 
-  // 1. 加载代理配置 (支持地理目标过滤)
-  let proxyManager = new ProxyManager([], opts.geoTarget);
+  // 1. Initialize modules — using stealth module
+  let proxyManager = new stealth.ProxyRotator([], { geoTarget: opts.geoTarget });
   if (opts.useProxy && opts.proxyConfig) {
     try {
       const proxyData = JSON.parse(fs.readFileSync(opts.proxyConfig, 'utf8'));
-      ANTI_DETECTION.proxies = proxyData.proxies || [];
-      proxyManager = new ProxyManager(ANTI_DETECTION.proxies, opts.geoTarget);
-      console.log(`[CONFIG] Loaded ${ANTI_DETECTION.proxies.length} proxies`);
+      const proxies = proxyData.proxies || [];
+      proxyManager = new stealth.ProxyRotator(proxies, { geoTarget: opts.geoTarget });
+      console.log(`[CONFIG] Loaded ${proxies.length} proxies`);
     } catch (err) {
       console.warn(`[CONFIG] Proxy config loading failed: ${err.message}`);
     }
@@ -974,18 +834,31 @@ async function main() {
   }
 
   // ============================================
-  // 启动浏览器 (带反检测配置)
+  // Launch browser with stealth args (85+ args from Scrapling)
   // ============================================
   const { chromium } = require('playwright');
   let currentProxy = opts.useProxy ? proxyManager.getCurrentProxy() : null;
-  const userAgent = randomChoice(ANTI_DETECTION.userAgents);
-  const viewport = randomChoice(ANTI_DETECTION.viewportSizes);
+
+  let launchOptions = stealth.buildLaunchOptions({
+    headless: opts.headless,
+    slowMo: opts.slowMo,
+    proxy: currentProxy ? stealth.ProxyRotator.toPlaywrightProxy(currentProxy) : undefined,
+    blockWebRTC: true,
+    canvasNoise: true,
+    allowWebGL: true,
+    noSandbox: true,
+  });
+
+  // Generate initial fingerprint for logging
+  const initialFingerprint = stealth.generateFingerprint({ languages: geoConfig.languages });
 
   console.log(`\n${'='.repeat(60)}`);
-  console.log('[BROWSER] Starting browser - Anti-Detection Mode');
+  console.log('[BROWSER] Starting browser - Stealth Enhanced Mode (Scrapling)');
   console.log(`${'='.repeat(60)}`);
-  console.log(`User-Agent: ${userAgent.substring(0, 60)}...`);
-  console.log(`Viewport: ${viewport.width}x${viewport.height}`);
+  console.log(`User-Agent: ${initialFingerprint.userAgent.substring(0, 60)}...`);
+  console.log(`Viewport: ${initialFingerprint.viewport.width}x${initialFingerprint.viewport.height}`);
+  console.log(`OS Profile: ${initialFingerprint.os} | Platform: ${initialFingerprint.platform}`);
+  console.log(`Launch Args: ${launchOptions.args.length} stealth args`);
   if (currentProxy) {
     console.log(`Proxy: ${currentProxy.server}`);
   }
@@ -994,42 +867,12 @@ async function main() {
   console.log(`Random Delay: ${opts.randomDelay ? 'ON' : 'OFF'}`);
   console.log(`${'='.repeat(60)}\n`);
 
-  let launchOptions = {
-    headless: opts.headless,
-    slowMo: opts.slowMo,
-    args: [
-      '--disable-gpu',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-web-security',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage'
-    ]
-  };
-
-  // 添加代理
-  if (currentProxy) {
-    launchOptions.proxy = {
-      server: currentProxy.server,
-      username: currentProxy.username,
-      password: currentProxy.password
-    };
-  }
-
   let browser = await chromium.launch(launchOptions);
 
-  const contextOptions = {
-    locale: geoConfig.locale,
-    userAgent: userAgent,
-    viewport: viewport,
-    timezoneId: geoConfig.timezone,
-    deviceScaleFactor: randomChoice([1, 1.5, 2]),
-    ignoreHTTPSErrors: true  // 允许通过代理访问 HTTPS
-  };
-
+  // Stealth context state
   let context = null;
   let page = null;
+  let currentFingerprint = null;
   let pageCrashed = false;
   let browserDisconnected = false;
 
@@ -1041,22 +884,24 @@ async function main() {
     });
   };
 
+  // Create stealth context using stealth module
   const initContextPage = async () => {
     if (context) {
       await context.close().catch(() => {});
     }
-    context = await browser.newContext(contextOptions);
-    if (opts.stealthMode) {
-      await applyStealth(context);
-    }
-    const acceptLanguage = geoConfig.languages.join(',');
-    await context.setExtraHTTPHeaders({
-      'Accept-Language': acceptLanguage,
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Referer': 'https://www.google.com/'
+    const result = await stealth.createStealthContext(browser, {
+      geoConfig,
+      proxy: currentProxy ? stealth.ProxyRotator.toPlaywrightProxy(currentProxy) : undefined,
+      stealthMode: opts.stealthMode,
+      blockImages: false,            // Default OFF to preserve review image links
+      blockHeavyResources: opts.blockResources !== false,
+      blockTracking: true,
+      canvasNoise: true,
+      webglSpoof: true,
     });
-    await enableResourceBlocking(context, opts);
-    page = await context.newPage();
+    context = result.context;
+    page = result.page;
+    currentFingerprint = result.fingerprint;
     page.setDefaultTimeout(opts.timeoutMs);
     page.setDefaultNavigationTimeout(opts.timeoutMs);
     attachPageHandlers();
@@ -1133,7 +978,11 @@ async function main() {
   for (let idx = startIndex; idx < endIndex; idx++) {
     const runIndex = idx - startIndex + 1;
     const placeId = placeIds[idx].place_id || placeIds[idx];  // 支持对象或字符串格式
-    const url = `https://www.google.com/maps/place/?q=place_id:${placeId}&hl=${encodeURIComponent(opts.hl)}`;
+    // Support both ChIJ place_id and hex ftid formats
+    const isFtid = placeId.startsWith('0x');
+    const url = isFtid
+      ? `https://www.google.com/maps/place/?ftid=${placeId}&hl=${encodeURIComponent(opts.hl)}`
+      : `https://www.google.com/maps/place/?q=place_id:${placeId}&hl=${encodeURIComponent(opts.hl)}`;
 
     if (browserDisconnected) {
       await restartBrowser('browser disconnected');
@@ -1168,13 +1017,12 @@ async function main() {
           page.on('response', responseHandler);
         }
 
-        // CRITICAL: Two-step page loading to ensure full interface with Reviews tab
-        // Step 1: Initialize with search API URL
+        // Two-step page loading: search pre-load is REQUIRED for full place panel (Reviews tab)
+        // Without this step, ftid URLs only show Overview+About (no Reviews)
         const searchUrl = `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${placeId}`;
         await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: opts.timeoutMs });
         await page.waitForTimeout(2000);
 
-        // Step 2: Load place URL with full interface
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts.timeoutMs });
         await page.waitForSelector('h1', { timeout: opts.timeoutMs });
 
@@ -1205,26 +1053,20 @@ async function main() {
             if (opts.retryOnCaptcha && opts.useProxy && retryCount < opts.maxRetries) {
               console.log(`[PROXY] Switching proxy and retrying...`);
 
-              // 标记当前代理失败
               const failedProxy = proxyManager.getCurrentProxy();
               if (failedProxy) {
                 proxyManager.markFailed(failedProxy);
               }
 
-              // 轮换代理
-              proxyManager.rotateProxy();
-
-              const newProxy = proxyManager.getCurrentProxy();
-              const newLaunchOptions = { ...launchOptions };
-              if (newProxy) {
-                newLaunchOptions.proxy = {
-                  server: newProxy.server,
-                  username: newProxy.username,
-                  password: newProxy.password
-                };
-              } else {
-                delete newLaunchOptions.proxy;
-              }
+              const newProxy = proxyManager.rotateProxy();
+              const newLaunchOptions = stealth.buildLaunchOptions({
+                headless: opts.headless,
+                slowMo: opts.slowMo,
+                proxy: newProxy ? stealth.ProxyRotator.toPlaywrightProxy(newProxy) : undefined,
+                blockWebRTC: true,
+                canvasNoise: true,
+                noSandbox: true,
+              });
 
               launchOptions = newLaunchOptions;
               currentProxy = newProxy || null;
@@ -1252,36 +1094,92 @@ async function main() {
 
         await autoScrollAndOpen(page);
         if (result && typeof result === 'object') {
-          // Extract reviews if extractor is available
-          if (reviewsExtractorSrc && opts.extractReviews !== false) {
+          // Extract reviews: API-first with DOM scroll fallback
+          if (opts.extractReviews !== false) {
             try {
-              console.log(`[${runIndex}/${total}] [REVIEWS] Extracting reviews...`);
+              // ========== PHASE 1: API extraction (primary) ==========
+              console.log(`[${runIndex}/${total}] [REVIEWS] Phase 1: API extraction (maxReviews=${opts.maxReviews})`);
 
-              // reviewTimestamps and responseHandler are already registered before page load
-              // to capture timestamps from initial review data in the page navigation
-
-              // Inject reviews extractor into page
-              await page.evaluate(reviewsExtractorSrc);
-
-              // Extract reviews with configurable options (with timeout protection)
-              const reviewExtractPromise = page.evaluate(async (config) => {
-                if (typeof window.extractReviewsByScrolling === 'function') {
-                  return await window.extractReviewsByScrolling(config);
-                }
-                return [];
-              }, {
+              const apiResult = await fetchAllReviews(page, {
                 maxReviews: opts.maxReviews || 1000,
-                maxScrolls: opts.maxScrolls || 1000,
-                includeImages: opts.includeReviewImages !== false,
-                scrollDelay: 500,
-                reviewSort: opts.reviewSort || 'relevant'
+                pageSize: 20,
+                delayMs: 200,
+                onProgress: (count, total) => {
+                  console.log(`[${runIndex}/${total}] [REVIEWS] API progress: ${count}/${total}`);
+                },
               });
 
-              const reviewTimeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`Review extraction timeout after ${opts.reviewTimeoutMs / 1000}s`)), opts.reviewTimeoutMs)
-              );
+              let allReviews = [];
+              const seenIds = new Set();
 
-              const reviews = await Promise.race([reviewExtractPromise, reviewTimeoutPromise]);
+              if (!apiResult.error && apiResult.reviews.length > 0) {
+                for (const r of apiResult.reviews) {
+                  seenIds.add(r.review_id);
+                  allReviews.push(r);
+                }
+                console.log(`[${runIndex}/${total}] [REVIEWS] API: ${allReviews.length} reviews (${apiResult.withText} text) in ${apiResult.elapsed}s`);
+              } else if (apiResult.error) {
+                console.warn(`[${runIndex}/${total}] [REVIEWS] API failed: ${apiResult.error}`);
+              }
+
+              // Set detected review count
+              const detectedTotal = apiResult.detectedCount;
+              if (detectedTotal && result.business) {
+                result.business.reviewCount = detectedTotal;
+              }
+
+              // ========== PHASE 2: DOM scroll supplement (only if API clearly fell short) ==========
+              const apiCoverage = detectedTotal ? (allReviews.length / detectedTotal) : 0;
+              const needSupplement = detectedTotal && apiCoverage < 0.95;
+              if (needSupplement && reviewsExtractorSrc) {
+                const remaining = detectedTotal ? (detectedTotal - allReviews.length) : 'unknown';
+                console.log(`[${runIndex}/${total}] [REVIEWS] Phase 2: DOM supplement (API got ${allReviews.length}${detectedTotal ? '/' + detectedTotal + ' = ' + Math.round(apiCoverage * 100) + '%' : ''}, need ~${remaining} more)`);
+
+                const consoleHandler = (msg) => {
+                  if (msg.text().includes('[Reviews]')) console.log(`[${runIndex}/${total}] [Browser] ${msg.text()}`);
+                };
+                page.on('console', consoleHandler);
+                await page.evaluate(reviewsExtractorSrc);
+
+                try {
+                  const scrollResult = await Promise.race([
+                    page.evaluate(async (config) => {
+                      if (typeof window.extractReviewsByScrolling === 'function') {
+                        return await window.extractReviewsByScrolling(config);
+                      }
+                      return { reviews: [], error: 'function_not_found' };
+                    }, {
+                      maxReviews: opts.maxReviews || 1000,
+                      maxScrolls: opts.maxScrolls || 1000,
+                      includeImages: opts.includeReviewImages !== false,
+                      scrollDelay: 500,
+                      reviewSort: opts.reviewSort || 'relevant'
+                    }),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('DOM scroll timeout')), 3600000))
+                  ]);
+
+                  const domReviews = Array.isArray(scrollResult) ? scrollResult : (scrollResult?.reviews || []);
+
+                  let domNew = 0;
+                  for (const r of domReviews) {
+                    if (!seenIds.has(r.review_id)) {
+                      seenIds.add(r.review_id);
+                      allReviews.push(r);
+                      domNew++;
+                    }
+                  }
+                  console.log(`[${runIndex}/${total}] [REVIEWS] DOM supplement: ${domReviews.length} extracted, ${domNew} new unique (total: ${allReviews.length})`);
+                } catch (domErr) {
+                  console.warn(`[${runIndex}/${total}] [REVIEWS] DOM supplement failed: ${domErr.message}`);
+                }
+                try { page.off('console', consoleHandler); } catch (e) {}
+              } else {
+                if (detectedTotal) {
+                  console.log(`[${runIndex}/${total}] [REVIEWS] API coverage ${Math.round(apiCoverage * 100)}% >= 95% — DOM supplement not needed`);
+                } else if (allReviews.length > 0) {
+                  console.log(`[${runIndex}/${total}] [REVIEWS] API got ${allReviews.length} reviews (count unknown) — skipping DOM supplement`);
+                }
+              }
 
               // Remove response handler after extraction
               if (responseHandler) {
@@ -1289,21 +1187,21 @@ async function main() {
                 responseHandler = null;
               }
 
-              if (reviews && reviews.length > 0) {
-                // Apply absolute timestamps to reviews
-                if (reviewTimestamps.size > 0) {
-                  const tsStats = applyTimestampsToReviews(reviews, reviewTimestamps);
+              // ========== PHASE 3: Finalize ==========
+              if (allReviews.length > 0) {
+                if (reviewTimestamps && reviewTimestamps.size > 0) {
+                  const tsStats = applyTimestampsToReviews(allReviews, reviewTimestamps);
                   console.log(`[${runIndex}/${total}] [TIMESTAMP] Applied ${tsStats.matched}/${tsStats.total} timestamps (${tsStats.matchRate})`);
                 }
 
-                result.detailedReviews = reviews;
-                console.log(`[${runIndex}/${total}] [REVIEWS] Extracted ${reviews.length} reviews`);
+                result.detailedReviews = allReviews;
+                console.log(`[${runIndex}/${total}] [REVIEWS] Final: ${allReviews.length} reviews${detectedTotal ? ` (${Math.round(allReviews.length/detectedTotal*100)}% of ${detectedTotal})` : ''}`);
 
                 // Download review images if enabled
                 if (imageDownloader && opts.includeReviewImages) {
                   try {
                     console.log(`[${runIndex}/${total}] [IMAGES] Downloading review images...`);
-                    await imageDownloader.downloadAllReviewImages(placeId, reviews, true);
+                    await imageDownloader.downloadAllReviewImages(placeId, allReviews, true);
                     const stats = imageDownloader.getStats();
                     console.log(`[${runIndex}/${total}] [IMAGES] Downloaded ${stats.success}/${stats.total} images (${stats.failed} failed)`);
                   } catch (imgError) {
@@ -1315,12 +1213,10 @@ async function main() {
               }
             } catch (reviewError) {
               console.warn(`[${runIndex}/${total}] [REVIEWS] Failed: ${reviewError.message}`);
-              // Clean up response handler on error/timeout
               if (responseHandler) {
                 try { page.off('response', responseHandler); } catch (e) {}
                 responseHandler = null;
               }
-              // Continue without reviews - don't fail the entire scrape
             }
           }
 

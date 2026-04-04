@@ -28,29 +28,66 @@ class ReviewImageDownloader {
    * @param {string} savePath - Local path to save the image
    * @returns {Promise<boolean>} - Success status
    */
-  async downloadImage(imageUrl, savePath) {
+  /**
+   * Download a single image, following redirects and with retry support.
+   * @param {string} imageUrl - URL of the image
+   * @param {string} savePath - Local path to save the image
+   * @param {number} [maxRedirects=3] - Maximum redirects to follow
+   * @returns {Promise<boolean>} - Success status
+   */
+  async downloadImage(imageUrl, savePath, maxRedirects = 3) {
     return new Promise((resolve) => {
       try {
-        // Ensure directory exists
         const dir = path.dirname(savePath);
         fs.mkdirSync(dir, { recursive: true });
 
-        const file = fs.createWriteStream(savePath);
         const protocol = imageUrl.startsWith('https') ? https : http;
 
         const request = protocol.get(imageUrl, (response) => {
-          if (response.statusCode === 200) {
-            response.pipe(file);
-            file.on('finish', () => {
-              file.close();
-              this.downloadStats.success++;
-              resolve(true);
-            });
-          } else {
+          // Handle redirects (301, 302, 303, 307, 308)
+          if ([301, 302, 303, 307, 308].includes(response.statusCode) && response.headers.location) {
+            response.resume(); // Consume response to free up memory
+            if (maxRedirects <= 0) {
+              this.downloadStats.failed++;
+              resolve(false);
+              return;
+            }
+            this.downloadImage(response.headers.location, savePath, maxRedirects - 1)
+              .then(resolve);
+            return;
+          }
+
+          if (response.statusCode !== 200) {
+            response.resume();
+            this.downloadStats.failed++;
+            resolve(false);
+            return;
+          }
+
+          // Validate content type
+          const contentType = response.headers['content-type'] || '';
+          if (contentType && !contentType.includes('image') && !contentType.includes('octet-stream')) {
+            response.resume();
+            this.downloadStats.failed++;
+            resolve(false);
+            return;
+          }
+
+          const file = fs.createWriteStream(savePath);
+
+          file.on('error', () => {
+            file.destroy();
             fs.unlink(savePath, () => {});
             this.downloadStats.failed++;
             resolve(false);
-          }
+          });
+
+          response.pipe(file);
+          file.on('finish', () => {
+            file.close();
+            this.downloadStats.success++;
+            resolve(true);
+          });
         });
 
         request.on('error', (err) => {
@@ -60,7 +97,8 @@ class ReviewImageDownloader {
           resolve(false);
         });
 
-        request.setTimeout(10000, () => {
+        // Adaptive timeout: 15s base, generous for larger images
+        request.setTimeout(15000, () => {
           request.destroy();
           fs.unlink(savePath, () => {});
           console.warn(`[IMAGE-DOWNLOAD] Timeout downloading ${imageUrl}`);
@@ -74,6 +112,25 @@ class ReviewImageDownloader {
         resolve(false);
       }
     });
+  }
+
+  /**
+   * Download with retry support
+   * @param {string} imageUrl - URL of the image
+   * @param {string} savePath - Local path to save the image
+   * @param {number} [maxRetries=2] - Maximum retry attempts
+   * @returns {Promise<boolean>} - Success status
+   */
+  async downloadWithRetry(imageUrl, savePath, maxRetries = 2) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const success = await this.downloadImage(imageUrl, savePath);
+      if (success) return true;
+      if (attempt < maxRetries) {
+        // Brief backoff before retry
+        await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+    return false;
   }
 
   /**

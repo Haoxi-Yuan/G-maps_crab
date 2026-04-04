@@ -13,8 +13,10 @@
  */
 
 const fs = require('fs');
+const stealth = require('./stealth');
 const path = require('path');
 const ReviewImageDownloader = require('./review_image_downloader');
+const { fetchAllReviews } = require('./api-review-fetcher');
 const {
     createResponseHandler,
     applyTimestampsToReviews
@@ -93,11 +95,15 @@ function ipcProgress(current, total, currentPlace = null) {
 function ipcLog(level, message, data = null) {
   ipcSend('log', { level, message, data });
 
-  // Also store in ring buffer for state file (survives backend restarts)
+  // Store in ring buffer for state file
   RECENT_LOGS.push({ timestamp: Date.now(), level, message, data });
   if (RECENT_LOGS.length > MAX_RECENT_LOGS) {
     RECENT_LOGS.shift();
   }
+
+  // Flush state file on every log so progress is always visible externally
+  TASK_STATS.lastActivityAt = Date.now();
+  writeStateFile();
 }
 
 /**
@@ -205,22 +211,8 @@ function setupSignalHandlers() {
 // ============================================
 
 const ANTI_DETECTION = {
-  proxies: [],
   delayRange: { min: 1000, max: 10000 },
   scrollDelayRange: { min: 100, max: 500 },
-  userAgents: [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
-  ],
-  viewportSizes: [
-    { width: 1920, height: 1080 },
-    { width: 1366, height: 768 },
-    { width: 1536, height: 864 },
-    { width: 1440, height: 900 }
-  ],
   captchaSelectors: [
     'iframe[src*="recaptcha"]',
     '[id*="captcha"]',
@@ -231,7 +223,10 @@ const ANTI_DETECTION = {
     'SG': { timezone: 'Asia/Singapore', locale: 'en-SG', languages: ['en-SG', 'en'] },
     'UK': { timezone: 'Europe/London', locale: 'en-GB', languages: ['en-GB', 'en'] },
     'JP': { timezone: 'Asia/Tokyo', locale: 'ja-JP', languages: ['ja-JP', 'ja', 'en'] },
-    'DE': { timezone: 'Europe/Berlin', locale: 'de-DE', languages: ['de-DE', 'de', 'en'] }
+    'DE': { timezone: 'Europe/Berlin', locale: 'de-DE', languages: ['de-DE', 'de', 'en'] },
+    'ES': { timezone: 'Europe/Madrid', locale: 'es-ES', languages: ['es-ES', 'es', 'en'] },
+    'FR': { timezone: 'Europe/Paris', locale: 'fr-FR', languages: ['fr-FR', 'fr', 'en'] },
+    'CN': { timezone: 'Asia/Shanghai', locale: 'zh-CN', languages: ['zh-CN', 'zh', 'en'] },
   },
   softBlockIndicators: ['popular times', 'opening hours', 'reviews'],
   softBlockSelectors: [
@@ -372,7 +367,7 @@ function parseArgs(argv) {
     // Timeout for review extraction page.evaluate() call (ms)
     reviewTimeoutMs: 300000,  // 5 minutes
     // Per-place timeout (ms) - wraps entire place processing including retries
-    placeTimeoutMs: 600000,   // 10 minutes
+    placeTimeoutMs: 0,   // 0 = adaptive (auto-calculated from review count), or fixed ms value
     // NEW: IPC mode parameters
     ipcMode: false,
     stateFile: null
@@ -744,66 +739,8 @@ function initOutputAsTruth(opts, inputFile, placeIds) {
   return { doneSet, retrySet, meta, outputPath, errorsPath, metaPath };
 }
 
-function getBlockedResourceTypes() {
-  return new Set(['image', 'media', 'font']);
-}
-
-async function enableResourceBlocking(context, opts) {
-  if (!opts.blockResources) return;
-  const blockedTypes = getBlockedResourceTypes();
-  await context.route('**/*', route => {
-    const resourceType = route.request().resourceType();
-    if (blockedTypes.has(resourceType)) {
-      return route.abort();
-    }
-    return route.continue();
-  });
-}
-
-// ============================================
-// Proxy Manager
-// ============================================
-
-class ProxyManager {
-  constructor(proxies, geoTarget = null) {
-    this.proxies = proxies || [];
-    this.currentIndex = 0;
-    this.failedProxies = new Set();
-    this.geoTarget = geoTarget;
-
-    if (geoTarget && this.proxies.length > 0) {
-      this.proxies = this.proxies.filter(p =>
-        !p.country || p.country.toUpperCase() === geoTarget.toUpperCase()
-      );
-    }
-  }
-
-  hasProxies() {
-    return this.proxies.length > 0;
-  }
-
-  getCurrentProxy() {
-    if (!this.hasProxies()) return null;
-    return this.proxies[this.currentIndex];
-  }
-
-  rotateProxy() {
-    if (!this.hasProxies()) return null;
-    this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
-
-    let attempts = 0;
-    while (this.failedProxies.has(JSON.stringify(this.getCurrentProxy())) && attempts < this.proxies.length) {
-      this.currentIndex = (this.currentIndex + 1) % this.proxies.length;
-      attempts++;
-    }
-
-    return this.getCurrentProxy();
-  }
-
-  markFailed(proxy) {
-    this.failedProxies.add(JSON.stringify(proxy));
-  }
-}
+// Resource blocking and ProxyManager now provided by stealth module
+// See: ./stealth/resource-blocker.js, ./stealth/proxy-rotator.js
 
 // ============================================
 // CAPTCHA Solver (stub)
@@ -870,20 +807,7 @@ async function detectCaptcha(page) {
   return false;
 }
 
-async function applyStealth(context) {
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    window.chrome = { runtime: {} };
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters) => (
-      parameters.name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission }) :
-        originalQuery(parameters)
-    );
-  });
-}
+// applyStealth now provided by stealth module — see ./stealth/apply-stealth.js
 
 async function simulateMouseMovement(page) {
   const viewport = page.viewportSize();
@@ -1181,13 +1105,13 @@ async function main() {
   const results = [];
   const needsCollection = opts.outputFormat === 'json' || opts.outputFormat === 'both' || opts.prettyOutput;
 
-  // Initialize modules
-  let proxyManager = new ProxyManager([], opts.geoTarget);
+  // Initialize modules — using stealth module
+  let proxyManager = new stealth.ProxyRotator([], { geoTarget: opts.geoTarget });
   if (opts.useProxy && opts.proxyConfig) {
     try {
       const proxyData = JSON.parse(fs.readFileSync(opts.proxyConfig, 'utf8'));
-      ANTI_DETECTION.proxies = proxyData.proxies || [];
-      proxyManager = new ProxyManager(ANTI_DETECTION.proxies, opts.geoTarget);
+      const proxies = proxyData.proxies || [];
+      proxyManager = new stealth.ProxyRotator(proxies, { geoTarget: opts.geoTarget });
     } catch (err) {
       // Ignore
     }
@@ -1202,47 +1126,26 @@ async function main() {
     geoConfig = ANTI_DETECTION.geoLocations[opts.geoTarget];
   }
 
-  // Launch browser
+  // Launch browser with stealth args (85+ args from Scrapling)
   const { chromium } = require('playwright');
   let currentProxy = opts.useProxy ? proxyManager.getCurrentProxy() : null;
-  const userAgent = randomChoice(ANTI_DETECTION.userAgents);
-  const viewport = randomChoice(ANTI_DETECTION.viewportSizes);
 
-  let launchOptions = {
+  let launchOptions = stealth.buildLaunchOptions({
     headless: opts.headless,
     slowMo: opts.slowMo,
-    args: [
-      '--disable-gpu',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-web-security',
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage'
-    ]
-  };
-
-  if (currentProxy) {
-    launchOptions.proxy = {
-      server: currentProxy.server,
-      username: currentProxy.username,
-      password: currentProxy.password
-    };
-  }
+    proxy: currentProxy ? stealth.ProxyRotator.toPlaywrightProxy(currentProxy) : undefined,
+    blockWebRTC: true,
+    canvasNoise: true,
+    allowWebGL: true,
+    noSandbox: true,
+  });
 
   let browser = await chromium.launch(launchOptions);
 
-  const contextOptions = {
-    locale: geoConfig.locale,
-    userAgent: userAgent,
-    viewport: viewport,
-    timezoneId: geoConfig.timezone,
-    deviceScaleFactor: randomChoice([1, 1.5, 2]),
-    ignoreHTTPSErrors: true
-  };
-
+  // Stealth context state
   let context = null;
   let page = null;
+  let currentFingerprint = null;
   let pageCrashed = false;
   let browserDisconnected = false;
 
@@ -1253,22 +1156,24 @@ async function main() {
     });
   };
 
+  // Create stealth context using stealth module (replaces manual context + applyStealth + headers + resource blocking)
   const initContextPage = async () => {
     if (context) {
       await context.close().catch(() => {});
     }
-    context = await browser.newContext(contextOptions);
-    if (opts.stealthMode) {
-      await applyStealth(context);
-    }
-    const acceptLanguage = geoConfig.languages.join(',');
-    await context.setExtraHTTPHeaders({
-      'Accept-Language': acceptLanguage,
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Referer': 'https://www.google.com/'
+    const result = await stealth.createStealthContext(browser, {
+      geoConfig,
+      proxy: currentProxy ? stealth.ProxyRotator.toPlaywrightProxy(currentProxy) : undefined,
+      stealthMode: opts.stealthMode,
+      blockImages: false,            // Default OFF to preserve review image links
+      blockHeavyResources: opts.blockResources !== false,
+      blockTracking: true,
+      canvasNoise: true,
+      webglSpoof: true,
     });
-    await enableResourceBlocking(context, opts);
-    page = await context.newPage();
+    context = result.context;
+    page = result.page;
+    currentFingerprint = result.fingerprint;
     page.setDefaultTimeout(opts.timeoutMs);
     page.setDefaultNavigationTimeout(opts.timeoutMs);
     attachPageHandlers();
@@ -1416,15 +1321,21 @@ async function main() {
     // runIndex: 1-based index within items we're actually processing this session
     const runIndex = processed - alreadyDoneCount + 1;
 
-    const url = `https://www.google.com/maps/place/?q=place_id:${placeId}&hl=${encodeURIComponent(opts.hl)}`;
+    // Support both ChIJ place_id and hex ftid formats
+    const isFtid = placeId.startsWith('0x');
+    const url = isFtid
+      ? `https://www.google.com/maps/place/?ftid=${placeId}&hl=${encodeURIComponent(opts.hl)}`
+      : `https://www.google.com/maps/place/?q=place_id:${placeId}&hl=${encodeURIComponent(opts.hl)}`;
 
     // Update current place for IPC
     ipcProgress(processed, total, placeId);
 
+    // Reuse context (don't create fresh per place — matches demo behavior)
+    // Only restart on crash/disconnect
     if (browserDisconnected) {
       await restartBrowser('browser disconnected');
     } else if (pageCrashed || (page && page.isClosed())) {
-      await restartContext('page unavailable');
+      await initContextPage(); // No randomNavigation
     }
 
     let retryCount = 0;
@@ -1434,162 +1345,123 @@ async function main() {
     const placeStartTime = Date.now();
 
     while (retryCount <= opts.maxRetries && !success && !SHOULD_STOP) {
-      // Check per-place timeout (wraps all retries + review extraction + image downloads)
-      if (opts.placeTimeoutMs > 0 && (Date.now() - placeStartTime) > opts.placeTimeoutMs) {
-        const elapsed = Math.round((Date.now() - placeStartTime) / 1000);
-        ipcLog('error', `[${runIndex}/${total}] PLACE TIMEOUT: ${placeId} after ${elapsed}s`);
-        errStream.write(JSON.stringify({ placeId, url, error: `Place timeout after ${elapsed}s` }) + '\n');
-        failedCount++;
-        break;
-      }
-
       try {
-        if (opts.randomDelay && runIndex > 1) {
-          const delay = randomDelay();
-          await page.waitForTimeout(delay);
-        }
-
         ipcLog('info', `[${runIndex}/${total}] Processing ${placeId}`);
 
-        // Register response handler BEFORE page load to capture initial review timestamps
-        // (reviews pre-loaded during page navigation are otherwise missed by the interceptor)
-        if (reviewsExtractorSrc && opts.extractReviews !== false) {
-          if (responseHandler) {
-            page.off('response', responseHandler);
-          }
-          reviewTimestamps = new Map();
-          responseHandler = createResponseHandler(reviewTimestamps, false);
-          page.on('response', responseHandler);
-        }
-
-        // Two-step page loading
+        // Lean two-step load: search preload + place URL + wait for h1
         const searchUrl = `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${placeId}`;
         await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: opts.timeoutMs });
         await page.waitForTimeout(2000);
 
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: opts.timeoutMs });
         await page.waitForSelector('h1', { timeout: opts.timeoutMs });
+        await page.waitForTimeout(2000);
 
-        const waitTime = opts.randomDelay ? randomDelay(3000, 5000) : 4000;
-        await page.waitForTimeout(waitTime);
-
-        if (opts.mouseSimulation) {
-          await simulateMouseMovement(page);
-        }
-
-        if (opts.detectCaptcha) {
-          const hasCaptcha = await detectCaptcha(page);
-          if (hasCaptcha) {
-            if (captchaSolver) {
-              await captchaSolver.solveCaptcha(page, null);
-            }
-
-            if (opts.retryOnCaptcha && opts.useProxy && retryCount < opts.maxRetries) {
-              const failedProxy = proxyManager.getCurrentProxy();
-              if (failedProxy) {
-                proxyManager.markFailed(failedProxy);
-              }
-
-              proxyManager.rotateProxy();
-              const newProxy = proxyManager.getCurrentProxy();
-              const newLaunchOptions = { ...launchOptions };
-              if (newProxy) {
-                newLaunchOptions.proxy = {
-                  server: newProxy.server,
-                  username: newProxy.username,
-                  password: newProxy.password
-                };
-              } else {
-                delete newLaunchOptions.proxy;
-              }
-
-              launchOptions = newLaunchOptions;
-              currentProxy = newProxy || null;
-              await restartBrowser('captcha', newLaunchOptions);
-
-              retryCount++;
-              continue;
-            } else {
-              throw new Error('CAPTCHA detected');
-            }
-          }
-        }
-
+        // Extract basic business data via pipeline
         const result = await page.evaluate(pipelineSrc);
 
-        if (opts.randomDelay) {
-          const scrollTimes = Math.floor(Math.random() * 2) + 1;
-          for (let s = 0; s < scrollTimes; s++) {
-            await humanScroll(page);
-          }
-        }
-
-        await autoScrollAndOpen(page);
-
         if (result && typeof result === 'object') {
-          // Extract reviews
-          if (reviewsExtractorSrc && opts.extractReviews !== false) {
+          // Extract reviews — API method (primary) with DOM scroll fallback
+          if (opts.extractReviews !== false) {
             try {
-              // reviewTimestamps and responseHandler are already registered before page load
-              // to capture timestamps from initial review data in the page navigation
+              // ========== PHASE 1: API extraction (primary) ==========
+              ipcLog('info', `[Reviews] Phase 1: API extraction (maxReviews=${opts.maxReviews})`);
 
-              // Capture browser console logs for debugging review extraction
-              const consoleHandler = (msg) => {
-                const text = msg.text();
-                if (text.includes('[Reviews]')) {
-                  ipcLog('info', `[Browser] ${text}`);
-                }
-              };
-              page.on('console', consoleHandler);
-
-              await page.evaluate(reviewsExtractorSrc);
-
-              ipcLog('info', `[Reviews] Starting extraction with maxReviews=${opts.maxReviews}, maxScrolls=${opts.maxScrolls}`);
-
-              const reviewExtractPromise = page.evaluate(async (config) => {
-                if (typeof window.extractReviewsByScrolling === 'function') {
-                  return await window.extractReviewsByScrolling(config);
-                }
-                return [];
-              }, {
+              const apiResult = await fetchAllReviews(page, {
                 maxReviews: opts.maxReviews || 1000,
-                maxScrolls: opts.maxScrolls || 1000,
-                includeImages: opts.includeReviewImages !== false,
-                scrollDelay: 500,
-                reviewSort: opts.reviewSort || 'relevant'
+                pageSize: 20,
+                delayMs: 200,
+                onProgress: (count, total) => {
+                  ipcLog('info', `[Reviews] API progress: ${count}/${total}`);
+                },
               });
 
-              // Cap review timeout by remaining place time to avoid exceeding per-place limit
-              const remainingPlaceTime = opts.placeTimeoutMs > 0
-                ? Math.max(10000, opts.placeTimeoutMs - (Date.now() - placeStartTime))
-                : opts.reviewTimeoutMs;
-              const effectiveReviewTimeout = Math.min(opts.reviewTimeoutMs, remainingPlaceTime);
+              let allReviews = [];
+              const seenIds = new Set();
 
-              const reviewTimeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`Review extraction timeout after ${effectiveReviewTimeout / 1000}s`)), effectiveReviewTimeout)
-              );
-
-              const reviews = await Promise.race([reviewExtractPromise, reviewTimeoutPromise]);
-
-              page.off('console', consoleHandler);
-              if (responseHandler) {
-                page.off('response', responseHandler);
-                responseHandler = null;
+              if (!apiResult.error && apiResult.reviews.length > 0) {
+                for (const r of apiResult.reviews) {
+                  seenIds.add(r.review_id);
+                  allReviews.push(r);
+                }
+                ipcLog('info', `[Reviews] API: ${allReviews.length} reviews (${apiResult.withText} text) in ${apiResult.elapsed}s`);
+              } else if (apiResult.error) {
+                ipcLog('warn', `[Reviews] API failed: ${apiResult.error}`);
               }
 
-              ipcLog('info', `[Reviews] Extracted ${reviews ? reviews.length : 0} reviews`);
+              // Set detected review count
+              const detectedTotal = apiResult.detectedCount;
+              if (detectedTotal && result.business) {
+                result.business.reviewCount = detectedTotal;
+              }
 
-              if (reviews && reviews.length > 0) {
-                if (reviewTimestamps.size > 0) {
-                  applyTimestampsToReviews(reviews, reviewTimestamps);
+              // ========== PHASE 2: DOM scroll supplement (only if API clearly fell short) ==========
+              const apiCoverage = detectedTotal ? (allReviews.length / detectedTotal) : 0;
+              // Only supplement if: detected count known AND API got < 95%
+              // If count unknown but API got reviews, assume API is sufficient (it reached its natural end)
+              const needSupplement = detectedTotal && apiCoverage < 0.95;
+              if (needSupplement && reviewsExtractorSrc) {
+                const remaining = detectedTotal ? (detectedTotal - allReviews.length) : 'unknown';
+                ipcLog('info', `[Reviews] Phase 2: DOM supplement (API got ${allReviews.length}${detectedTotal ? '/' + detectedTotal + ' = ' + Math.round(apiCoverage * 100) + '%' : ' (count unknown)'}, need ~${remaining} more)`);
+
+                const consoleHandler = (msg) => {
+                  if (msg.text().includes('[Reviews]')) ipcLog('info', `[Browser] ${msg.text()}`);
+                };
+                page.on('console', consoleHandler);
+                await page.evaluate(reviewsExtractorSrc);
+
+                try {
+                  const scrollResult = await Promise.race([
+                    page.evaluate(async (config) => {
+                      if (typeof window.extractReviewsByScrolling === 'function') {
+                        return await window.extractReviewsByScrolling(config);
+                      }
+                      return { reviews: [], error: 'function_not_found' };
+                    }, {
+                      maxReviews: opts.maxReviews || 1000,
+                      maxScrolls: opts.maxScrolls || 1000,
+                      includeImages: opts.includeReviewImages !== false,
+                      scrollDelay: 500,
+                      reviewSort: opts.reviewSort || 'relevant'
+                    }),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('DOM scroll timeout')), 3600000))
+                  ]);
+
+                  const domReviews = Array.isArray(scrollResult) ? scrollResult : (scrollResult?.reviews || []);
+
+                  // Merge: add DOM reviews not already captured by API
+                  let domNew = 0;
+                  for (const r of domReviews) {
+                    if (!seenIds.has(r.review_id)) {
+                      seenIds.add(r.review_id);
+                      allReviews.push(r);
+                      domNew++;
+                    }
+                  }
+                  ipcLog('info', `[Reviews] DOM supplement: ${domReviews.length} extracted, ${domNew} new unique (total: ${allReviews.length})`);
+                } catch (domErr) {
+                  ipcLog('warn', `[Reviews] DOM supplement failed: ${domErr.message}`);
                 }
+                try { page.off('console', consoleHandler); } catch (e) {}
+              } else {
+                if (detectedTotal) {
+                  ipcLog('info', `[Reviews] API coverage ${Math.round(apiCoverage * 100)}% >= 95% — DOM supplement not needed`);
+                } else {
+                  ipcLog('info', `[Reviews] API got ${allReviews.length} reviews (count unknown, API reached natural end) — skipping DOM supplement`);
+                }
+              }
 
-                result.detailedReviews = reviews;
-                reviewCount += reviews.length;
+              // ========== PHASE 3: Finalize ==========
+              if (allReviews.length > 0) {
+                if (reviewTimestamps && reviewTimestamps.size > 0) {
+                  applyTimestampsToReviews(allReviews, reviewTimestamps);
+                }
+                result.detailedReviews = allReviews;
+                reviewCount += allReviews.length;
 
                 if (imageDownloader && opts.includeReviewImages) {
                   try {
-                    await imageDownloader.downloadAllReviewImages(placeId, reviews, false);
+                    await imageDownloader.downloadAllReviewImages(placeId, allReviews, false);
                     const stats = imageDownloader.getStats();
                     imageCount += stats.success;
                   } catch (imgError) {
@@ -1597,10 +1469,16 @@ async function main() {
                   }
                 }
               }
+
+              ipcLog('info', `[Reviews] Final: ${allReviews.length} reviews${detectedTotal ? ` (${Math.round(allReviews.length/detectedTotal*100)}% of ${detectedTotal})` : ''}`);
+
+              if (responseHandler) {
+                try { page.off('response', responseHandler); } catch (e) {}
+                responseHandler = null;
+              }
+
             } catch (reviewError) {
               ipcLog('error', `[Reviews] Extraction failed: ${reviewError.message}`);
-              // Clean up handlers on error/timeout
-              try { page.off('console', consoleHandler); } catch (e) {}
               if (responseHandler) {
                 try { page.off('response', responseHandler); } catch (e) {}
                 responseHandler = null;

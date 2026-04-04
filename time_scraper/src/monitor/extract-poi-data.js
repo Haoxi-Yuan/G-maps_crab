@@ -421,9 +421,13 @@
         }
 
         // APP_STATE fallback for reviewCount (only if DOM failed)
+        // Locale-independent: match formatted numbers with comma or dot separators
         if (result.reviewCount === null) {
             var reviewCountCandidates = deepSearchFirstAvailable(searchRoots, function(obj) {
-                return typeof obj === 'string' && /^\d{1,3}(,\d{3})*$/.test(obj);
+                if (typeof obj !== 'string') return false;
+                var trimmed = obj.trim();
+                // Match: "1,234" or "1.234" or "12345" (at least 1 digit, no letters)
+                return /^[\d][,.\d]*$/.test(trimmed) && trimmed.replace(/[\D]/g, '').length >= 1;
             });
             if (reviewCountCandidates.length > 0) {
                 var bestCount = null;
