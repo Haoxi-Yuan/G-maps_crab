@@ -1130,7 +1130,7 @@ async function main() {
 
               // ========== PHASE 2: DOM scroll supplement (only if API clearly fell short) ==========
               const apiCoverage = detectedTotal ? (allReviews.length / detectedTotal) : 0;
-              const needSupplement = detectedTotal && apiCoverage < 0.95;
+              const needSupplement = apiResult.blocked || (detectedTotal && apiCoverage < 0.95);
               if (needSupplement && reviewsExtractorSrc) {
                 const remaining = detectedTotal ? (detectedTotal - allReviews.length) : 'unknown';
                 console.log(`[${runIndex}/${total}] [REVIEWS] Phase 2: DOM supplement (API got ${allReviews.length}${detectedTotal ? '/' + detectedTotal + ' = ' + Math.round(apiCoverage * 100) + '%' : ''}, need ~${remaining} more)`);

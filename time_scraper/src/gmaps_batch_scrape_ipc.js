@@ -1397,9 +1397,8 @@ async function main() {
 
               // ========== PHASE 2: DOM scroll supplement (only if API clearly fell short) ==========
               const apiCoverage = detectedTotal ? (allReviews.length / detectedTotal) : 0;
-              // Only supplement if: detected count known AND API got < 95%
-              // If count unknown but API got reviews, assume API is sufficient (it reached its natural end)
-              const needSupplement = detectedTotal && apiCoverage < 0.95;
+              // Supplement if: API was blocked, OR detected count known AND API got < 95%
+              const needSupplement = apiResult.blocked || (detectedTotal && apiCoverage < 0.95);
               if (needSupplement && reviewsExtractorSrc) {
                 const remaining = detectedTotal ? (detectedTotal - allReviews.length) : 'unknown';
                 ipcLog('info', `[Reviews] Phase 2: DOM supplement (API got ${allReviews.length}${detectedTotal ? '/' + detectedTotal + ' = ' + Math.round(apiCoverage * 100) + '%' : ' (count unknown)'}, need ~${remaining} more)`);

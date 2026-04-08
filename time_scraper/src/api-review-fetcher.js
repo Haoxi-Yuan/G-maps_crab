@@ -113,6 +113,7 @@ async function fetchAllReviews(page, opts = {}) {
   let pageNum = 0;
   let lastFlushAt = 0;
   let consecutiveEmpty = 0;
+  let blocked = false;
   const startTime = Date.now();
 
   while (reviews.length < effectiveMax) {
@@ -129,27 +130,64 @@ async function fetchAllReviews(page, opts = {}) {
       }, apiUrl);
 
       if (resp.error) {
-        if (resp.error === 429) {
-          // Rate limited — wait and retry
-          await page.waitForTimeout(10000);
-          continue;
+        if (resp.error === 429 || resp.error === 403) {
+          // Rate limited or blocked — pause 30s and retry once
+          if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing 30s...`);
+          await page.waitForTimeout(30000);
+          const retry = await page.evaluate(async (url) => {
+            const r = await fetch(url, { credentials: 'include' });
+            if (!r.ok) return { error: r.status };
+            return { text: await r.text() };
+          }, apiUrl);
+          if (retry.error) {
+            blocked = true;
+            break; // Second failure → give up API, fallback to DOM
+          }
+          const retryData = JSON.parse(retry.text.replace(/^\)\]\}'\n/, ''));
+          nextToken = retryData[1] || '';
+          pageReviews = retryData[2] || [];
+        } else {
+          break;
         }
-        break;
+      } else {
+        const data = JSON.parse(resp.text.replace(/^\)\]\}'\n/, ''));
+        nextToken = data[1] || '';
+        pageReviews = data[2] || [];
       }
-
-      const data = JSON.parse(resp.text.replace(/^\)\]\}'\n/, ''));
-      nextToken = data[1] || '';
-      pageReviews = data[2] || [];
     } catch (e) {
       // Parse error or network error — stop
       break;
     }
 
     if (pageReviews.length === 0) {
-      consecutiveEmpty++;
-      if (consecutiveEmpty >= 3) break;
-      await page.waitForTimeout(1000);
-      continue;
+      // Distinguish "normal end" vs "blocked": if we're far from detectedCount, it's likely a block
+      const coverage = detectedCount ? (reviews.length / detectedCount) : 1;
+      if (coverage < 0.8) {
+        // Suspect block — pause 30s and retry once
+        if (onProgress) onProgress(reviews.length, effectiveMax, 'Empty page, suspect block, pausing 30s...');
+        await page.waitForTimeout(30000);
+        const retryResp = await page.evaluate(async (url) => {
+          const r = await fetch(url, { credentials: 'include' });
+          if (!r.ok) return { error: r.status };
+          return { text: await r.text() };
+        }, apiUrl);
+        if (retryResp.error || !retryResp.text) {
+          blocked = true;
+          break;
+        }
+        try {
+          const retryData = JSON.parse(retryResp.text.replace(/^\)\]\}'\n/, ''));
+          nextToken = retryData[1] || '';
+          pageReviews = retryData[2] || [];
+          if (pageReviews.length === 0) { blocked = true; break; } // Retry also empty → blocked
+        } catch (e) { blocked = true; break; }
+      } else {
+        // Coverage >= 80%, likely natural end
+        consecutiveEmpty++;
+        if (consecutiveEmpty >= 3) break;
+        await page.waitForTimeout(1000);
+        continue;
+      }
     }
 
     // Track actual new reviews added (not just pageReviews.length)
@@ -259,7 +297,8 @@ async function fetchAllReviews(page, opts = {}) {
     withText,
     elapsed,
     pages: pageNum,
-    error: null,
+    blocked,
+    error: blocked ? 'api_blocked_fallback_to_dom' : null,
   };
 }
 
