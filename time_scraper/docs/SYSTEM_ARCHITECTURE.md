@@ -1,5 +1,7 @@
 # Google Maps Batch Scraper System - File Architecture
 
+> Update note (2026-04-05): Review extraction is now API-first. Any detailed sections below that describe `reviews_extractor_scroll.js` as the primary path should be read as historical or fallback-only unless explicitly updated.
+
 ## Data Preparation Tools
 
 ### City Generator

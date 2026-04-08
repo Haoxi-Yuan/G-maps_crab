@@ -1,248 +1,151 @@
-# Google Maps批处理抓取（含评论） - 使用指南
+# Google Maps Batch Scraper - Batch Guide
 
-## 文件说明
+## Current Behavior
 
-`gmaps_batch_scrape_with_reviews.js` 是基于 `gmaps_batch_scrape_stable.js` 的增强版本，集成了评论提取功能。
+`gmaps_batch_scrape_with_reviews.js` is the main CLI entry point for batch scraping.
 
-## 关键改进
+Review extraction now follows this order:
 
-### 1. 两步加载策略
+1. Two-step page load to stabilize the Google Maps place UI.
+2. `api-review-fetcher.js` fetches reviews from the Google Maps review RPC endpoint.
+3. `reviews_extractor_scroll.js` is used only as a DOM supplement when API coverage is clearly below the detected review count.
 
-自动使用两步加载确保完整界面：
-```javascript
-// Step 1: 初始化搜索API
-await page.goto(searchUrl, ...)
-// Step 2: 加载完整place页面
-await page.goto(placeUrl, ...)
-```
+This means the project is no longer a "scroll-first" review scraper.
 
-### 2. 自动评论提取
+## Key Parameters
 
-在基础数据提取后自动提取评论：
-- 默认提取50条评论
-- 可配置滚动次数和最大评论数
-- 失败不影响基础数据提取
+| Parameter | Meaning | Default |
+| --- | --- | --- |
+| `--input <file>` | Input place list | required unless using search mode |
+| `--output <file>` | Output NDJSON path | required |
+| `--limit <n>` | Limit number of places | all |
+| `--headless` | Run browser headless | off |
+| `--no-reviews` | Disable review extraction | reviews enabled |
+| `--max-reviews <n>` | Max reviews per place | 1000 |
+| `--max-scrolls <n>` | Max DOM fallback scrolls | 1000 |
+| `--review-sort <order>` | `relevant`, `newest`, `highest`, `lowest` | `relevant` |
+| `--no-review-images` | Skip review image URL extraction | extract images |
+| `--download-images` | Download review images locally | off |
+| `--image-output <dir>` | Image output directory | `output/images` |
+| `--search-mode` | Search POI from sampling points first | off |
+| `--points <file>` | Sampling points CSV/JSON | required in search mode |
+| `--categories <file>` | Category config JSON | required in search mode |
+| `--max-search-scrolls <n>` | Max scrolls per search result page | 15 |
 
-### 3. 新增命令行参数
+## Recommended Usage
 
-| 参数 | 说明 | 默认值 |
-|-----|------|-------|
-| `--no-reviews` | 禁用评论提取 | 启用 |
-| `--max-reviews N` | 最大提取评论数 | 50 |
-| `--max-scrolls N` | 最大滚动次数 | 20 |
-| `--no-review-images` | 不提取评论图片URL | 提取 |
-
-## 基础用法
-
-### 标准运行（提取评论）
-
-```bash
-node gmaps_batch_scrape_with_reviews.js \
-  --input coordinates_singapore.json \
-  --output output/places_with_reviews.ndjson \
-  --limit 10
-```
-
-### 提取更多评论
+### Basic business data only
 
 ```bash
-node gmaps_batch_scrape_with_reviews.js \
-  --input coordinates_singapore.json \
+node src/gmaps_batch_scrape_with_reviews.js \
+  --input data/coordinates_singapore.json \
+  --output output/basic.ndjson \
+  --limit 10 \
+  --no-reviews
+```
+
+### Business data plus reviews
+
+```bash
+node src/gmaps_batch_scrape_with_reviews.js \
+  --input data/coordinates_singapore.json \
   --output output/places_with_reviews.ndjson \
+  --limit 10 \
+  --max-reviews 200 \
+  --review-sort newest \
+  --headless
+```
+
+### Search mode plus scraping
+
+```bash
+node src/gmaps_batch_scrape_with_reviews.js \
+  --search-mode \
+  --points data/hongkong/hong_kong_points.csv \
+  --categories config/categories.json \
+  --search-zoom 1000m \
+  --output output/hongkong_results.ndjson \
+  --max-reviews 200 \
+  --headless
+```
+
+### Review image download
+
+```bash
+node src/gmaps_batch_scrape_with_reviews.js \
+  --input data/coordinates_singapore.json \
+  --output output/places_with_images.ndjson \
+  --limit 10 \
   --max-reviews 100 \
-  --max-scrolls 30 \
-  --limit 10
+  --download-images \
+  --image-output output/images
 ```
 
-### 禁用评论提取
+## Performance Notes
 
-```bash
-node gmaps_batch_scrape_with_reviews.js \
-  --input coordinates_singapore.json \
-  --output output/places_basic.ndjson \
-  --no-reviews \
-  --limit 10
-```
+- API review extraction is usually much faster than DOM scrolling.
+- DOM fallback is only expected for edge cases where API coverage is obviously incomplete.
+- Search mode still relies on scrolling the Google Maps result list; that is separate from review extraction.
 
-## 高级用法
+## Troubleshooting
 
-### 使用代理 + 评论提取
+### Reviews are missing or too few
 
-```bash
-node gmaps_batch_scrape_with_reviews.js \
-  --input coordinates_singapore.json \
-  --output output/places_with_reviews.ndjson \
-  --use-proxy \
-  --proxy-config proxy.json \
-  --random-delay \
-  --max-reviews 50 \
-  --limit 10
-```
+- Check log lines beginning with `[Reviews] API`.
+- If fallback is triggered, also inspect `[Reviews] DOM supplement`.
+- Use `--review-sort newest` when you care about deep pagination quality.
+- Watch for CAPTCHA or soft blocks if review counts suddenly collapse.
 
-### Headless模式
+### Review extraction is slow
 
-```bash
-node gmaps_batch_scrape_with_reviews.js \
-  --input coordinates_singapore.json \
-  --output output/places_with_reviews.ndjson \
-  --headless \
-  --max-reviews 30 \
-  --limit 10
-```
+- Lower `--max-reviews`.
+- Use `--headless`.
+- Use `--download-images` only when needed.
+- Remember that search mode scroll cost and review extraction cost are separate stages.
 
-## 输出格式
+### Images failed to download
 
-基础数据 + 评论数据：
+- Check network stability and redirects.
+- Confirm the output directory is writable.
+- Retry with a smaller batch before large runs.
+
+## Output Shape
+
+Typical record layout:
 
 ```json
 {
   "business": {
-    "name": "Cappadocia Restaurant",
+    "name": "Example Place",
     "rating": 4.7,
-    "categories": ["Turkish restaurant"],
-    "mainCategory": "Turkish restaurant"
+    "reviewCount": 7958
   },
-  "about": { ... },
-  "metadata": { ... },
-  "openingHours": { ... },
-  "popularTimes": { ... },
+  "openingHours": {},
+  "popularTimes": {},
+  "about": {},
   "detailedReviews": [
     {
-      "review_id": "26354;mutable:true;",
+      "review_id": "review-id",
       "rating": 5,
-      "review_text": "I ordered the Lamb Chops...",
+      "review_text": "Great place.",
       "published_at": "a month ago",
-      "reviewer_name": "Andriana Stefani",
-      "reviewer_photo_count": 21,
-      "reviewer_review_count": 19,
-      "is_local_guide": true,
-      "review_images": ["https://..."]
+      "published_at_date": "2026-03-01",
+      "reviewer_name": "Jane Doe",
+      "reviewer_link": "https://www.google.com/maps/contrib/...",
+      "review_images": []
     }
   ],
   "_meta": {
     "placeId": "ChIJ...",
-    "sourceUrl": "https://..."
+    "sourceUrl": "https://www.google.com/maps/place/?q=place_id:ChIJ..."
   }
 }
 ```
 
-## 性能考虑
+## Related Files
 
-### 时间成本
-
-每个地点的处理时间：
-
-| 模式 | 时间 | 说明 |
-|-----|------|------|
-| 无评论 | ~5-10秒 | 基础数据提取 |
-| 50条评论 | ~25-35秒 | +20秒评论提取 |
-| 100条评论 | ~45-60秒 | +40秒评论提取 |
-
-### 推荐配置
-
-**快速模式** (测试用):
-```bash
---max-reviews 20 --max-scrolls 10
-```
-
-**平衡模式** (推荐):
-```bash
---max-reviews 50 --max-scrolls 20
-```
-
-**完整模式** (数据密集):
-```bash
---max-reviews 100 --max-scrolls 30
-```
-
-## 错误处理
-
-### 评论提取失败
-
-评论提取失败不会影响基础数据：
-```
-[1/10] [REVIEWS] Failed: Reviews tab not found
-[1/10] [OK] ChIJ...
-```
-
-基础数据仍会保存，`detailedReviews` 字段不存在或为空。
-
-### 页面加载失败
-
-使用两步加载后，如果仍然失败：
-- 自动重试（最多3次）
-- 增加 `--random-delay` 参数
-- 检查网络连接
-
-### CAPTCHA处理
-
-遇到CAPTCHA时：
-1. 使用代理轮换: `--use-proxy --proxy-config proxy.json`
-2. 增加随机延迟: `--random-delay`
-3. 配置CAPTCHA solver: `--captcha-solver YOUR_API_KEY`
-
-## 与原版比较
-
-| 特性 | 原版 (stable) | 评论版 (with_reviews) |
-|-----|--------------|---------------------|
-| 基础数据提取 | ✓ | ✓ |
-| 页面加载 | 单步 | **两步** |
-| 评论提取 | ✗ | **✓** |
-| 向后兼容 | N/A | ✓ |
-| 性能 | 快 | 稍慢（+20-40秒/地点） |
-
-## 依赖
-
-需要以下文件存在：
-- `/Volumes/Data/scraper/google-maps-scraper-pipeline.js` - 基础数据提取pipeline
-- `/Volumes/Data/time_scraper/reviews_extractor_scroll.js` - 评论提取模块
-
-如果 `reviews_extractor_scroll.js` 不存在，会跳过评论提取但继续运行。
-
-## 示例：批量处理100个地点
-
-```bash
-node gmaps_batch_scrape_with_reviews.js \
-  --input coordinates_singapore.json \
-  --output output/singapore_places_reviews.ndjson \
-  --limit 100 \
-  --max-reviews 50 \
-  --random-delay \
-  --restart-every 25
-```
-
-预计时间：
-- 100个地点 × 30秒/地点 = 50分钟
-- 包含基础数据 + 50条评论/地点
-
-## Troubleshooting
-
-### 问题：评论数量为0
-
-检查：
-1. 确认 `reviews_extractor_scroll.js` 文件存在
-2. 查看控制台是否显示 "Reviews extractor loaded"
-3. 检查是否使用了 `--no-reviews` 参数
-
-### 问题：评论提取很慢
-
-解决：
-- 减少 `--max-reviews` (如设为30)
-- 减少 `--max-scrolls` (如设为15)
-- 使用 `--no-review-images` 禁用图片提取
-
-### 问题：内存占用高
-
-解决：
-- 使用 `--headless` 模式
-- 减少 `--restart-every` 值（如设为10）
-- 限制同时处理数量 `--limit`
-
-## 更新日志
-
-### v1.0 (2026-01-23)
-- ✓ 集成两步加载策略
-- ✓ 添加评论提取功能
-- ✓ 新增4个命令行参数
-- ✓ 向后兼容原版功能
-- ✓ 错误处理不影响基础数据
+- `src/gmaps_batch_scrape_with_reviews.js`
+- `src/gmaps_batch_scrape_ipc.js`
+- `src/api-review-fetcher.js`
+- `src/reviews_extractor_scroll.js`
+- `src/review_image_downloader.js`

@@ -286,8 +286,8 @@ program
       console.log('\nCleanup complete.');
       console.log('Recommended next steps:');
       console.log('  1. Re-import data to fully restore baseline:');
-      console.log('     node cli.js import --source /Volumes/Data/scraped_by_categories --format old');
-      console.log('     node cli.js import --source /Volumes/Data/Pipeline/data --format new');
+      console.log('     node cli.js import --source ./data/legacy_import --format old');
+      console.log('     node cli.js import --source ./data/pipeline_import --format new');
       console.log('  2. Run fresh scan: node cli.js scan --limit 50');
     } catch (err) {
       log('error', err.message);

@@ -1,6 +1,110 @@
 # Google Maps Batch Scraper System
 
-A powerful Google Maps data scraping tool supporting batch extraction of business information, opening hours, popular times, reviews, and images.
+A Google Maps scraping toolkit for batch extraction of business data, opening hours, popular times, reviews, and review images.
+
+## Current Review Architecture
+
+The current review pipeline is **API-first**:
+
+- `src/api-review-fetcher.js` is the primary review extractor.
+- `src/reviews_extractor_scroll.js` is kept as a **DOM supplement / fallback**, not the default path.
+- `src/stealth/` contains the Scrapling-inspired browser hardening layer used by both CLI and IPC entry points.
+
+In other words: the project no longer relies on DOM scrolling as the main review strategy.
+
+## End-to-End Scraping Flow
+
+For a direct `place_id` input list, the runtime flow is:
+
+```text
+Input (place_id list)
+  -> Create stealth browser/context
+    -> For each place:
+      1. Two-step page load
+      2. Extract business data via pipeline
+      3. Fetch reviews via API (primary path)
+         |- API complete enough -> continue
+         |- API blocked / clearly incomplete -> wait 30s and retry once inside API fetcher
+         `- Still blocked / still insufficient -> run DOM supplement
+      4. Merge reviews by review_id
+      5. Attach timestamps / optional image download
+      6. Append one JSON object to .ndjson
+    -> Move to next place
+```
+
+### 1. Stealth Browser Startup
+
+Both production entry points create a stealth-enabled browser/context before scraping:
+
+- 85+ launch arguments reduce obvious automation fingerprints.
+- Fingerprint generation keeps user agent, platform, locale, and viewport internally consistent.
+- Init scripts spoof common browser signals such as `navigator.webdriver`, canvas output, and WebGL traits.
+- Optional resource blocking reduces tracking noise and heavy background requests.
+
+### 2. Two-Step Page Loading
+
+Google Maps place pages are more reliable after a search preload:
+
+1. Open `https://www.google.com/maps/search/?api=1&query=Google&query_place_id=...`
+2. Open `https://www.google.com/maps/place/?q=place_id:...&hl=en`
+3. Wait for `h1` so the place page is stable
+
+This step is important because the Reviews tab and related state are not consistently available with a direct place open alone.
+
+### 3. Basic Business Extraction
+
+`src/google-maps-scraper-pipeline.js` runs in `page.evaluate()` and extracts the non-review business payload:
+
+- name, address, coordinates, categories
+- rating, review count, phone, website
+- opening hours and popular times
+- about/service metadata
+
+### 4. API Review Extraction
+
+`src/api-review-fetcher.js` is the primary review engine:
+
+1. Detect review count from the current DOM when possible.
+2. Click the Reviews tab to capture the first `listugcposts` request URL.
+3. Rewrite the URL for deep pagination:
+   - `!1i20` for page size
+   - `!13m1!1e2` for `newest` ordering
+   - `!2s` reset for the first page token
+4. Page through the API with `fetch()` from browser context.
+5. Parse review fields, deduplicate by `review_id`, and stop at natural end, repeated empty pages, or `--max-reviews`.
+
+Retry behavior inside the API fetcher:
+
+- HTTP `429` or `403` -> pause 30s -> retry once
+- Empty page with coverage still below 80% of detected total -> pause 30s -> retry once
+- If retry still fails, mark the API path as blocked and hand off to DOM supplement
+
+### 5. DOM Supplement
+
+`src/reviews_extractor_scroll.js` is used only when:
+
+- the API path is marked blocked, or
+- detected review count is known and API coverage is below 95%
+
+The DOM path injects the scroll extractor into the page, loads more review cards, and merges only reviews not already returned by the API path.
+
+### 6. Finalization and Write-Out
+
+For each place:
+
+- merged reviews are stored in `result.detailedReviews`
+- `_meta` is attached with `placeId` and `sourceUrl`
+- one JSON object is appended to the output `.ndjson`
+- optional review image download stores files under `output/images/`
+
+### Entry Points
+
+The two production entry points share the same scraping logic but differ in orchestration:
+
+| Entry point | Main use | Progress reporting | State files |
+| --- | --- | --- | --- |
+| `src/gmaps_batch_scrape_with_reviews.js` | CLI / batch runs | `console.log` | checkpoint-oriented CLI flow |
+| `src/gmaps_batch_scrape_ipc.js` | backend/UI orchestration | IPC log messages + task stats | `.state.json` for UI, output-as-truth for recovery |
 
 ## Project Structure
 
@@ -11,13 +115,16 @@ time_scraper/
 │   │   ├── boundary-generator.js             # City boundary generation
 │   │   ├── points-generator.js               # Sampling point generation
 │   │   └── index.js                          # Main entry program
-│   ├── google-maps-scraper-pipeline.js       # Basic data extraction engine
+│   ├── google-maps-scraper-pipeline.js       # Basic business data extraction engine
 │   ├── poi-searcher.js                       # POI search module
 │   ├── gmaps_batch_scrape_with_reviews.js    # Main batch processing script (CLI)
 │   ├── gmaps_batch_scrape_ipc.js             # IPC version for Web UI backend
-│   ├── reviews_extractor_scroll.js           # Review extraction module (scroll-based)
+│   ├── api-review-fetcher.js                 # Primary review extractor (Google Maps RPC API)
+│   ├── reviews_extractor_scroll.js           # DOM supplement / fallback for reviews
 │   ├── review_image_downloader.js            # Image download module
-│   └── review_timestamp_parser.js            # Absolute timestamp extraction
+│   ├── review_timestamp_parser.js            # Absolute timestamp extraction
+│   ├── convert-xlsx-to-input.js              # Utility: convert XLSX place lists to scraper input
+│   └── stealth/                             # Scrapling-inspired stealth layer
 │
 ├── backend/                      # Web UI backend (Express + WebSocket)
 │   ├── server.js                             # Express server entry
@@ -154,9 +261,14 @@ node src/gmaps_batch_scrape_with_reviews.js \
   --input data/coordinates_singapore.json \
   --output output/results.ndjson \
   --limit 10 \
-  --max-reviews 50 \
-  --max-scrolls 20
+  --max-reviews 200 \
+  --review-sort newest
 ```
+
+Notes:
+
+- Reviews are fetched via the internal Google Maps review API first.
+- `--max-scrolls` still exists, but it only matters when DOM supplement is needed.
 
 ### 4. Download Review Images
 
@@ -252,11 +364,12 @@ node src/gmaps_batch_scrape_with_reviews.js \
 - Opening hours (complete 7-day schedule)
 - Popular times (7-day visit heat data)
 - About information (service options, amenities, payment methods, etc.)
-- Review extraction (via scrolling, with sort order control)
+- Review extraction (**API-first**, with DOM supplement only when coverage is insufficient)
 - Absolute timestamp extraction (published_at_date from API interception)
 - Reviewer profile link extraction
 - Review image URL extraction
 - Review image local download
+- Scrapling-inspired stealth hardening (launch args, fingerprinting, resource blocking, proxy rotation)
 
 ### Anti-Detection Mechanisms
 - User-Agent rotation
@@ -284,10 +397,15 @@ node src/gmaps_batch_scrape_with_reviews.js \
 
 ### Review Related
 - `--max-reviews <number>` - Maximum reviews per place (default 1000)
-- `--max-scrolls <number>` - Maximum scroll count (default 1000)
-- `--review-sort <order>` - Review sort order: `relevant` (default), `newest`, `highest`, `lowest`
+- `--max-scrolls <number>` - Maximum DOM supplement scroll count (default 1000, only used when fallback is needed)
+- `--review-sort <order>` - Review sort order for DOM supplement: `relevant` (default), `newest`, `highest`, `lowest`
 - `--no-reviews` - Disable review extraction
 - `--no-review-images` - Disable review image URL extraction
+
+Current implementation note:
+
+- The API path already forces deep pagination internally and does not currently follow `--review-sort`.
+- `--review-sort` mainly affects the DOM supplement path.
 
 ### Image Download
 - `--download-images` - Enable review image download
@@ -472,9 +590,9 @@ For detailed documentation, see the `docs/` directory:
 
 ### 1. Review Extraction Failed or Too Few Reviews?
 - Ensure using two-step loading strategy
-- The scroll mechanism uses `dispatchEvent(new Event('scroll'))` to trigger Google Maps lazy loading
-- Adaptive scroll delay: 500ms when content loads, 1500ms when idle (auto-adjusted)
-- The extractor stops only when physically stuck at the bottom for 3 consecutive attempts (2s wait each)
+- Review extraction is API-first; check `[Reviews] API ...` logs before debugging DOM fallback
+- DOM scrolling is only used as a supplement when API coverage is clearly below the detected total
+- If fallback is triggered, the scroll mechanism uses `dispatchEvent(new Event('scroll'))` to trigger lazy loading
 - Check browser console logs (captured via `page.on('console')`) for `[Reviews]` messages
 - Use `--review-sort newest` to sort by newest first
 - Check for CAPTCHA encounter
@@ -497,6 +615,7 @@ Internal use project
 
 ## Maintenance History
 
+- **2026-04-05**: Switched review extraction to **API-first architecture** -- added `src/api-review-fetcher.js` for Google Maps RPC review pagination, integrated Scrapling-inspired stealth modules under `src/stealth/`, kept `src/reviews_extractor_scroll.js` as DOM supplement only when API coverage is below threshold, and added `src/convert-xlsx-to-input.js` for place ID conversion workflows.
 - **2026-02-01**: Implemented **Output-as-Truth Architecture** -- Complete rewrite of resume/recovery logic. Output files (`output.ndjson`, `errors.ndjson`) are now the single source of truth. New functions: `computeConfigHash()`, `scanOutputForDoneSet()`, `initOutputAsTruth()`. Auto-detects config changes via MD5 hash and backs up old files. Built-in retry logic for failed items (`--max-error-retries`). Simplified `TaskController.js` by removing baseline accumulation. See [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) for details.
 - **2026-01-27**: Fixed **Checkpoint Resume progress accumulation** -- IPC script now reads checkpoint regardless of `--start` flag; uses `originalStart` for `endIndex` to preserve chunk boundaries; progress accumulated (baseline + new) like stats; `error`/`completed_at` properly cleared on resume; added `scripts/repair-progress.js` to sync historical data
 - **2026-01-27**: Fixed **Parallel Group progress data inconsistency** -- WebSocket progress events now include `percentage` field; `useTask` hook recalculates percentage on every update; unified Instance Switcher polling interval to 5s (was 10s) to match group banner frequency

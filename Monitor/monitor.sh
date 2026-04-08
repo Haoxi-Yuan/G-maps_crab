@@ -52,10 +52,10 @@ case $choice in
     fi
     ;;
   7)
-    node cli.js import --source /Volumes/Data/scraped_by_categories --format old
+    node cli.js import --source ./data/legacy_import --format old
     ;;
   8)
-    node cli.js import --source /Volumes/Data/Pipeline/data --format new
+    node cli.js import --source ./data/pipeline_import --format new
     ;;
   9)
     node cli.js discover --city Singapore

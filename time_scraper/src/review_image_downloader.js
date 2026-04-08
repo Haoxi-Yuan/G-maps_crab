@@ -12,8 +12,10 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 
+const DEFAULT_IMAGE_DIR = path.resolve(__dirname, '..', 'output', 'images');
+
 class ReviewImageDownloader {
-  constructor(baseDir = '/Volumes/Data/time_scraper/output/images') {
+  constructor(baseDir = DEFAULT_IMAGE_DIR) {
     this.baseDir = baseDir;
     this.downloadStats = {
       total: 0,
