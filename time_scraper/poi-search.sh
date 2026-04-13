@@ -13,6 +13,124 @@ MIN_CELL=0.06
 THRESHOLD=18
 DELAY=150
 SAVE_INTERVAL=20
+RUN_MODE=""         # "foreground" or "background" (default: background)
+CITY_NAME=""
+POINTS_FILE=""
+OUTPUT_FILE=""
+CAT_FILTER=""
+BBOX_INPUT=""
+
+# ============================================
+# Parse CLI arguments (non-interactive mode)
+# ============================================
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --run)       RUN_MODE="background"; shift ;;
+      --foreground) RUN_MODE="foreground"; shift ;;
+      --city)      CITY_NAME="$2"; shift 2 ;;
+      --points)    POINTS_FILE="$2"; shift 2 ;;
+      --output)    OUTPUT_FILE="$2"; shift 2 ;;
+      --categories) CAT_FILTER="$2"; shift 2 ;;
+      --bbox)      BBOX_INPUT="$2"; shift 2 ;;
+      --max-depth) MAX_DEPTH="$2"; shift 2 ;;
+      --min-cell)  MIN_CELL="$2"; shift 2 ;;
+      --threshold) THRESHOLD="$2"; shift 2 ;;
+      --delay)     DELAY="$2"; shift 2 ;;
+      --cell-size) CELL_SIZE="$2"; shift 2 ;;
+      --fresh)     FRESH=1; shift ;;
+      --status)    show_status; exit 0 ;;
+      --stop)      stop_background; exit 0 ;;
+      --help)      show_help; exit 0 ;;
+      *)           echo "Unknown option: $1"; show_help; exit 1 ;;
+    esac
+  done
+}
+
+show_help() {
+  echo ""
+  echo "Usage: ./poi-search.sh [options]"
+  echo ""
+  echo "Interactive mode (default):"
+  echo "  ./poi-search.sh                 Start interactive wizard"
+  echo ""
+  echo "Non-interactive mode:"
+  echo "  ./poi-search.sh --run --city san_francisco"
+  echo "  ./poi-search.sh --run --city 'New York' --bbox '-74.05,40.68,-73.90,40.88'"
+  echo "  ./poi-search.sh --run --city san_francisco --foreground"
+  echo ""
+  echo "Options:"
+  echo "  --run             Run directly (background by default)"
+  echo "  --foreground      Run in foreground instead of background"
+  echo "  --city <name>     City name or existing data dir name"
+  echo "  --points <file>   Points file (auto-detected from city if omitted)"
+  echo "  --output <file>   Output file (default: output/{city}_poi_search.json)"
+  echo "  --categories <list>  Comma-separated category filter"
+  echo "  --bbox <coords>   Bounding box: minLng,minLat,maxLng,maxLat"
+  echo "  --max-depth <n>   Max quadtree depth (default: 8)"
+  echo "  --min-cell <km>   Min cell size in km (default: 0.06)"
+  echo "  --threshold <n>   Subdivide threshold (default: 18)"
+  echo "  --delay <ms>      Request delay in ms (default: 150)"
+  echo "  --cell-size <m>   Sampling cell size in meters (default: 1000)"
+  echo "  --fresh           Delete existing output and start fresh"
+  echo "  --status          Show status of running/completed searches"
+  echo "  --stop            Stop background search process"
+  echo ""
+}
+
+# ============================================
+# Status and process management
+# ============================================
+show_status() {
+  echo ""
+  echo "=== POI Search Status ==="
+  echo ""
+
+  # Check for running processes
+  local pids=$(pgrep -f "poi-searcher-api" 2>/dev/null || true)
+  if [ -n "$pids" ]; then
+    echo "Running processes:"
+    for pid in $pids; do
+      local elapsed=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
+      echo "  PID $pid (elapsed: $elapsed)"
+    done
+    echo ""
+  else
+    echo "No running search processes."
+    echo ""
+  fi
+
+  # Check output files
+  for f in output/*_poi_search.json; do
+    [ -f "$f" ] || continue
+    local info=$(python3 -c "
+import json
+d = json.load(open('$f'))
+cats = d.get('results', [])
+prog = d.get('progress', {})
+total_cats = prog.get('totalCategories', len(cats))
+cur = prog.get('currentCategory', '')
+print(f'{d.get(\"totalPlaceIds\",0)} POIs | {len(cats)}/{total_cats} categories' + (f' | current: {cur}' if cur else ' | done'))
+" 2>/dev/null || echo "error reading")
+    echo "  $f"
+    echo "    $info"
+    echo ""
+  done
+}
+
+stop_background() {
+  local pids=$(pgrep -f "poi-searcher-api" 2>/dev/null || true)
+  if [ -z "$pids" ]; then
+    echo "No running search processes found."
+    return
+  fi
+  for pid in $pids; do
+    echo "Stopping PID $pid..."
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 2
+  echo "Done. Progress has been saved to the output file."
+}
 
 # ============================================
 # Helper functions
@@ -68,7 +186,152 @@ list_cities() {
 }
 
 # ============================================
-# Step 1: Select or create city
+# Resolve city → points file + output file
+# ============================================
+resolve_city() {
+  local city_slug=$(echo "$CITY_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd 'a-z0-9_')
+  CITY_DIR="data/$city_slug"
+
+  # Auto-detect points file
+  if [ -z "$POINTS_FILE" ]; then
+    POINTS_FILE=$(ls "${CITY_DIR}/"*_points.json 2>/dev/null | head -1)
+  fi
+
+  # If no points file, need to generate
+  if [ -z "$POINTS_FILE" ] || [ ! -f "$POINTS_FILE" ]; then
+    echo "Generating boundary and points for: $CITY_NAME"
+    local bbox_arg=""
+    [ -n "$BBOX_INPUT" ] && bbox_arg="--bbox $BBOX_INPUT"
+    node src/city-generator/index.js \
+      --city "$CITY_NAME" \
+      --output "$CITY_DIR" \
+      --cell-size "$CELL_SIZE" \
+      $bbox_arg
+    POINTS_FILE=$(ls "${CITY_DIR}/"*_points.json 2>/dev/null | head -1)
+    if [ -z "$POINTS_FILE" ]; then
+      echo "ERROR: Failed to generate points"
+      exit 1
+    fi
+  fi
+
+  # Auto-detect output file
+  if [ -z "$OUTPUT_FILE" ]; then
+    OUTPUT_FILE="output/${city_slug}_poi_search.json"
+  fi
+
+  # Fresh start
+  if [ "${FRESH:-0}" = "1" ] && [ -f "$OUTPUT_FILE" ]; then
+    rm -f "$OUTPUT_FILE"
+  fi
+}
+
+# ============================================
+# Core node command (used by both modes)
+# ============================================
+build_node_command() {
+  local cat_filter_code=""
+  if [ -n "$CAT_FILTER" ]; then
+    cat_filter_code="
+    const selected = new Set('${CAT_FILTER}'.split(',').map(s => s.trim().toLowerCase()));
+    categories = categories.filter(c => selected.has(c.toLowerCase()));
+    console.log('Filtered to', categories.length, 'categories:', categories.join(', '));
+    "
+  fi
+
+  NODE_CMD="node -e \"
+const { chromium } = require('playwright');
+const api = require('./src/poi-searcher-api');
+
+(async () => {
+  const points = api.loadPointsFromJSON('${POINTS_FILE}');
+  let categories = api.loadCategories('config/categories.json');
+  ${cat_filter_code}
+  console.log('Points:', points.length, '| Categories:', categories.length);
+
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const result = await api.batchSearchPOIs(browser, points, categories, {
+      maxDepth: ${MAX_DEPTH},
+      subdivideThreshold: ${THRESHOLD},
+      requestDelayMs: ${DELAY},
+      minCellSizeKm: ${MIN_CELL},
+      saveInterval: ${SAVE_INTERVAL},
+      incrementalSaveFile: '${OUTPUT_FILE}',
+    });
+    console.log('');
+    console.log('=== COMPLETED ===');
+    console.log('Total unique POIs:', result.totalPlaceIds);
+    let totalReq = 0;
+    for (const r of result.results) {
+      console.log('  ' + r.category + ': +' + r.newPlaceIds + ' (' + r.requests + ' req, ' + r.elapsed + 's)');
+      totalReq += r.requests;
+    }
+    console.log('Total requests:', totalReq);
+    console.log('Output saved to: ${OUTPUT_FILE}');
+  } finally {
+    await browser.close();
+  }
+})();
+\""
+}
+
+# ============================================
+# Non-interactive run
+# ============================================
+run_direct() {
+  if [ -z "$CITY_NAME" ]; then
+    echo "ERROR: --city is required with --run"
+    show_help
+    exit 1
+  fi
+
+  resolve_city
+  build_node_command
+
+  local LOG_FILE="${OUTPUT_FILE%.json}.log"
+
+  # Log rotation
+  if [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 2000 ]; then
+    tail -500 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+  fi
+
+  local pc=$(python3 -c "import json; print(len(json.load(open('$POINTS_FILE'))))" 2>/dev/null || echo "?")
+
+  if [ "$RUN_MODE" = "foreground" ]; then
+    echo ""
+    echo "Starting POI search (foreground)..."
+    echo "  City: $CITY_NAME | Points: $pc | Output: $OUTPUT_FILE"
+    echo ""
+    eval "$NODE_CMD" 2>&1 | tee "$LOG_FILE"
+  else
+    # Background mode (default)
+    echo ""
+    echo "Starting POI search (background)..."
+    echo "  City:    $CITY_NAME"
+    echo "  Points:  $POINTS_FILE ($pc points)"
+    echo "  Output:  $OUTPUT_FILE"
+    echo "  Log:     $LOG_FILE"
+    echo ""
+
+    mkdir -p "$(dirname "$OUTPUT_FILE")"
+    nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+    local PID=$!
+
+    echo "  PID:     $PID"
+    echo ""
+    echo "Monitor progress:"
+    echo "  tail -f $LOG_FILE"
+    echo "  ./poi-search.sh --status"
+    echo ""
+    echo "Stop:"
+    echo "  ./poi-search.sh --stop"
+    echo "  (progress is auto-saved, restart to resume)"
+    echo ""
+  fi
+}
+
+# ============================================
+# Interactive mode steps
 # ============================================
 step_select_city() {
   print_header
@@ -99,9 +362,6 @@ step_select_city() {
   fi
 }
 
-# ============================================
-# Step 2: Boundary + Points
-# ============================================
 step_boundary_and_points() {
   local boundary_file=$(ls "${CITY_DIR}/"*_boundary.geojson 2>/dev/null | head -1)
   local points_file=$(ls "${CITY_DIR}/"*_points.json 2>/dev/null | head -1)
@@ -154,9 +414,6 @@ step_boundary_and_points() {
   echo "Generated $pc sampling points"
 }
 
-# ============================================
-# Step 3: Configure search parameters
-# ============================================
 step_configure() {
   echo ""
   echo "--- Search Configuration ---"
@@ -217,18 +474,8 @@ step_configure() {
   fi
 }
 
-# ============================================
-# Step 4: Launch search
-# ============================================
 step_launch() {
-  local cat_filter_code=""
-  if [ -n "$CAT_FILTER" ]; then
-    cat_filter_code="
-    const selected = new Set('${CAT_FILTER}'.split(',').map(s => s.trim().toLowerCase()));
-    categories = categories.filter(c => selected.has(c.toLowerCase()));
-    console.log('Filtered to', categories.length, 'categories:', categories.join(', '));
-    "
-  fi
+  build_node_command
 
   local LOG_FILE="${OUTPUT_FILE%.json}.log"
 
@@ -246,62 +493,48 @@ step_launch() {
   echo "  Delay:      ${DELAY}ms"
   echo "=========================================="
   echo ""
-  read -p "Start? [Y/n] " CONFIRM
-  if [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ]; then
-    echo "Aborted."
-    exit 0
-  fi
+  read -p "Run in background? [Y/n] " BG_CHOICE
 
-  # Log rotation: keep last 500 lines if log exceeds 2000 lines
+  # Log rotation
   if [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)" -gt 2000 ]; then
     tail -500 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
   fi
 
-  echo ""
-  echo "Starting... (Ctrl+C to stop, progress saved to $OUTPUT_FILE)"
-  echo ""
+  mkdir -p "$(dirname "$OUTPUT_FILE")"
 
-  node -e "
-const { chromium } = require('playwright');
-const api = require('./src/poi-searcher-api');
-
-(async () => {
-  const points = api.loadPointsFromJSON('${POINTS_FILE}');
-  let categories = api.loadCategories('config/categories.json');
-  ${cat_filter_code}
-  console.log('Points:', points.length, '| Categories:', categories.length);
-
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const result = await api.batchSearchPOIs(browser, points, categories, {
-      maxDepth: ${MAX_DEPTH},
-      subdivideThreshold: ${THRESHOLD},
-      requestDelayMs: ${DELAY},
-      minCellSizeKm: ${MIN_CELL},
-      saveInterval: ${SAVE_INTERVAL},
-      incrementalSaveFile: '${OUTPUT_FILE}',
-    });
-    console.log('');
-    console.log('=== COMPLETED ===');
-    console.log('Total unique POIs:', result.totalPlaceIds);
-    let totalReq = 0;
-    for (const r of result.results) {
-      console.log('  ' + r.category + ': +' + r.newPlaceIds + ' (' + r.requests + ' req, ' + r.elapsed + 's)');
-      totalReq += r.requests;
-    }
-    console.log('Total requests:', totalReq);
-    console.log('Output saved to: ${OUTPUT_FILE}');
-  } finally {
-    await browser.close();
-  }
-})();
-" 2>&1 | tee "$LOG_FILE"
+  if [ "$BG_CHOICE" = "n" ] || [ "$BG_CHOICE" = "N" ]; then
+    echo ""
+    echo "Starting (foreground, Ctrl+C to stop)..."
+    echo ""
+    eval "$NODE_CMD" 2>&1 | tee "$LOG_FILE"
+  else
+    echo ""
+    nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+    local PID=$!
+    echo "Started in background (PID: $PID)"
+    echo ""
+    echo "Monitor progress:"
+    echo "  tail -f $LOG_FILE"
+    echo "  ./poi-search.sh --status"
+    echo ""
+    echo "Stop:"
+    echo "  ./poi-search.sh --stop"
+    echo ""
+  fi
 }
 
 # ============================================
-# Main flow
+# Main
 # ============================================
-step_select_city
-step_boundary_and_points
-step_configure
-step_launch
+parse_args "$@"
+
+if [ -n "$RUN_MODE" ]; then
+  # Non-interactive mode
+  run_direct
+else
+  # Interactive mode
+  step_select_city
+  step_boundary_and_points
+  step_configure
+  step_launch
+fi
