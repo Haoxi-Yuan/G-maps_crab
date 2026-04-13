@@ -214,9 +214,10 @@ resolve_city() {
     fi
   fi
 
-  # Auto-detect output file
+  # Auto-detect output file (organized by city folder)
   if [ -z "$OUTPUT_FILE" ]; then
-    OUTPUT_FILE="output/${city_slug}_poi_search.json"
+    mkdir -p "output/${city_slug}"
+    OUTPUT_FILE="output/${city_slug}/poi_search.json"
   fi
 
   # Fresh start
@@ -452,9 +453,10 @@ step_configure() {
   echo "Categories: $cat_count (from config/categories.json)"
   read -p "Filter categories? (comma-separated, or Enter for all)> " CAT_FILTER
 
-  # Output file
+  # Output file (organized by city folder)
   local city_slug=$(echo "$CITY_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd 'a-z0-9_')
-  OUTPUT_FILE="output/${city_slug}_poi_search.json"
+  mkdir -p "output/${city_slug}"
+  OUTPUT_FILE="output/${city_slug}/poi_search.json"
   echo ""
   read -p "Output file (default: $OUTPUT_FILE)> " INPUT
   [ -n "$INPUT" ] && OUTPUT_FILE="$INPUT"
