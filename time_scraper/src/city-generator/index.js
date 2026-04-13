@@ -131,6 +131,7 @@ class CityDataGenerator {
       bbox: this.options.bbox
     });
 
+    await generator.init();
     const numPoints = this.options.numPoints || generator.calculateNumPoints();
     return generator.generate(numPoints);
   }

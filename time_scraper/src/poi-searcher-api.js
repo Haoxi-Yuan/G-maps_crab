@@ -26,7 +26,7 @@ const CONFIG = {
   // Quadtree settings
   maxDepth: 6,               // Max recursion depth (depth 6 ≈ initial_size / 64)
   subdivideThreshold: 18,    // If results >= this, subdivide (max is ~20)
-  minCellSizeKm: 0.05,       // Don't subdivide below 50m
+  minCellSizeKm: 0.12,       // Don't subdivide below 120m (zoom 19)
 
   // Request settings
   requestDelayMs: 200,       // Delay between API requests
@@ -37,7 +37,7 @@ const CONFIG = {
   maxConcurrent: 1,          // Sequential by default (increase with proxies)
 
   // Incremental save
-  saveInterval: 100,         // Save every N searches
+  saveInterval: 20,          // Save every N requests
 };
 
 // ============================================
@@ -60,8 +60,9 @@ function cellSizeToZoom(cellSizeKm) {
   if (cellSizeKm >= 2)  return 15;
   if (cellSizeKm >= 1)  return 16;
   if (cellSizeKm >= 0.5) return 17;
-  if (cellSizeKm >= 0.2) return 18;
-  return 19;
+  if (cellSizeKm >= 0.25) return 18;
+  if (cellSizeKm >= 0.12) return 19;
+  return 20;
 }
 
 // ============================================
@@ -172,7 +173,19 @@ async function capturePbTemplate(page, query, lat, lng) {
 }
 
 /**
+ * Haversine distance in meters between two lat/lng points.
+ */
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
  * Fetch POI place_ids from tbm=map endpoint for a given cell.
+ * Returns ftids, place coordinates, and distance ratio for adaptive subdivision.
  */
 async function fetchCellPlaceIds(page, query, lat, lng, altitude, pbTemplate) {
   const pb = pbTemplate
@@ -185,14 +198,43 @@ async function fetchCellPlaceIds(page, query, lat, lng, altitude, pbTemplate) {
   const result = await page.evaluate(async (fetchUrl) => {
     try {
       const resp = await fetch(fetchUrl, { credentials: 'include' });
-      if (!resp.ok) return { error: resp.status, ftids: [] };
+      if (!resp.ok) return { error: resp.status, ftids: [], places: [] };
       const text = await resp.text();
-      const ftids = [...new Set((text.match(/0x[0-9a-f]+:0x[0-9a-f]+/g) || []))];
-      return { ftids, bytes: text.length };
+      const idx = text.indexOf('[');
+      if (idx < 0) return { error: 'no_json', ftids: [], places: [] };
+      const data = JSON.parse(text.substring(idx));
+      const rawPlaces = data[64] || [];
+      const places = [];
+      const ftids = [];
+      for (const item of rawPlaces) {
+        const p = item && item[1];
+        if (!p || !p[10]) continue;
+        ftids.push(p[10]);
+        places.push({
+          ftid: p[10],
+          lat: p[9] ? p[9][2] : null,
+          lng: p[9] ? p[9][3] : null,
+        });
+      }
+      return { ftids: [...new Set(ftids)], places, bytes: text.length };
     } catch (e) {
-      return { error: e.message, ftids: [] };
+      return { error: e.message, ftids: [], places: [] };
     }
   }, url);
+
+  // Compute distance ratio: farthest result distance / viewport radius
+  if (!result.error && result.places.length > 0) {
+    const viewportRadius = altitude * 0.5; // approximate
+    let farthest = 0;
+    for (const p of result.places) {
+      if (p.lat == null) continue;
+      const dist = haversine(lat, lng, p.lat, p.lng);
+      if (dist > farthest) farthest = dist;
+    }
+    result.farthestDist = Math.round(farthest);
+    result.viewportRadius = Math.round(viewportRadius);
+    result.distRatio = viewportRadius > 0 ? farthest / viewportRadius : 1;
+  }
 
   return result;
 }
@@ -253,12 +295,52 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
   const cellLabel = `${indent}[d${depth}] (${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}) ${bbox.sizeKm.toFixed(2)}km z${zoom}`;
 
   // Decide: subdivide or stop
-  const atLimit = result.ftids.length >= threshold;
-  const canSubdivide = depth < maxDepth && bbox.sizeKm / 2 >= (opts.minCellSizeKm ?? CONFIG.minCellSizeKm);
+  // Based on two signals:
+  //   1. Result count: < 20 means all POIs returned, no need to subdivide
+  //   2. Distance ratio: farthest result / viewport radius
+  //      - ratio < 0.7 → results clustered near center, many POIs truncated (6-22% coverage)
+  //      - ratio 0.7-1.0 → moderate truncation
+  //      - ratio >= 1.0 → results spread beyond viewport, area likely covered
+  //
+  // Adaptive minCell: dense areas (low ratio) get finer subdivision
+  //   - truncated (r < 0.7): minCell = 0.12km (zoom 19)
+  //   - moderate (r 0.7-1.0): minCell = 0.25km (zoom 18)
+  //   - spread (r >= 1.0): stop immediately
+  const isEmpty = result.ftids.length === 0;
+  const hitLimit = result.ftids.length >= threshold;
+  const distRatio = result.distRatio ?? 1;
 
-  if (atLimit && canSubdivide && newIds.length > 0) {
-    // Results at capacity AND found new IDs — subdivide
-    if (onProgress) onProgress(stats, `${cellLabel}: ${result.ftids.length} results (${newIds.length} new) → subdividing`);
+  // Adaptive minCell based on density signal (distance ratio)
+  //   r < 0.5  → extreme density → subdivide to 0.06km (zoom 20)
+  //   r 0.5-0.7 → dense → subdivide to 0.12km (zoom 19)
+  //   r 0.7-1.0 → moderate → subdivide to 0.25km (zoom 18)
+  //   r >= 1.0  → sparse → stop
+  const adaptiveMinCell = distRatio < 0.5 ? 0.06 : distRatio < 0.7 ? 0.12 : 0.25;
+  const canSubdivide = depth < maxDepth && bbox.sizeKm / 2 >= adaptiveMinCell;
+
+  let shouldSubdivide = false;
+  let reason = '';
+
+  if (isEmpty) {
+    reason = 'empty';
+  } else if (!hitLimit) {
+    reason = 'complete';
+  } else if (distRatio >= 1.0) {
+    reason = 'spread';
+  } else if (!canSubdivide) {
+    reason = depth >= maxDepth ? 'max_depth' : 'min_cell';
+  } else if (distRatio < 0.7) {
+    shouldSubdivide = true;
+    reason = distRatio < 0.5 ? 'extreme' : 'truncated';
+  } else {
+    shouldSubdivide = true;
+    reason = 'moderate';
+  }
+
+  const ratioStr = distRatio < 10 ? ` r=${distRatio.toFixed(2)}` : '';
+
+  if (shouldSubdivide) {
+    if (onProgress && depth <= 3) onProgress(stats, `${cellLabel}: ${result.ftids.length} results (${newIds.length} new)${ratioStr} → subdividing [${reason}]`);
 
     const quads = subdivideBBox(bbox);
     for (const quad of quads) {
@@ -267,8 +349,9 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
       newIds.push(...subIds);
     }
   } else {
-    // Under threshold or max depth — this cell is complete
-    if (onProgress) onProgress(stats, `${cellLabel}: ${result.ftids.length} results (${newIds.length} new) ✓`);
+    if (onProgress && newIds.length > 0) {
+      onProgress(stats, `${cellLabel}: +${newIds.length} new${ratioStr} ✓ [${reason}]`);
+    }
   }
 
   return newIds;
@@ -367,6 +450,9 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       const catStartIds = allPlaceIds.size;
       const startTime = Date.now();
 
+      let lastSaveAt = 0;
+      const saveThrottle = options.saveInterval || CONFIG.saveInterval; // every N requests
+
       const onProgress = (st, msg) => {
         console.log(`  ${msg} [total: ${allPlaceIds.size}]`);
         if (progressCallback) {
@@ -375,6 +461,23 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
             totalCategories,
             `${category}: ${allPlaceIds.size} POIs (${st.requests} requests)`
           );
+        }
+        // Real-time incremental save (throttled)
+        if (incrementalSaveFile && st.requests - lastSaveAt >= saveThrottle) {
+          lastSaveAt = st.requests;
+          const saveData = {
+            timestamp: new Date().toISOString(),
+            progress: { categoriesDone: catIndex - 1, totalCategories, currentCategory: category, requests: st.requests },
+            totalPlaceIds: allPlaceIds.size,
+            uniquePlaceIds: Array.from(allPlaceIds),
+            results,
+            searchArea: { ...bbox },
+          };
+          try {
+            const tmp = incrementalSaveFile + '.tmp';
+            fs.writeFileSync(tmp, JSON.stringify(saveData, null, 2), 'utf8');
+            fs.renameSync(tmp, incrementalSaveFile);
+          } catch (e) {}
         }
       };
 
