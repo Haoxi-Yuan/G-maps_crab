@@ -132,23 +132,36 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(2000);
 
-        // Fetch reviews
+        // Fetch reviews with incremental flush to prevent data loss
         log('  Fetching reviews...');
+        const partialFile = outputFile + '.partial.' + pid.replace(/[^a-z0-9]/gi, '_');
+        let flushedCount = 0;
+
         const reviewResult = await fetchAllReviews(page, {
           maxReviews,
           pageSize: CONFIG.pageSize,
           delayMs: CONFIG.delayMs,
+          flushEvery: 100,
           onProgress: (count, total, msg) => {
             if (msg) log(`    ${msg}`);
             else log(`    progress: ${count}/${total}`);
           },
+          onFlush: (batch) => {
+            // Write each batch of ~100 reviews to a partial file
+            const lines = batch.map(r => JSON.stringify(r)).join('\n') + '\n';
+            fs.appendFileSync(partialFile, lines);
+            flushedCount += batch.length;
+          },
         });
+
+        // Clean up partial file (data is now in reviewResult.reviews)
+        try { fs.unlinkSync(partialFile); } catch (e) {}
 
         const fetched = reviewResult.reviews.length;
         const coverage = expected > 0 ? Math.round(fetched / expected * 100) + '%' : '-';
         log(`  DONE: ${fetched}/${expected} (${coverage}) | ${reviewResult.withText || 0} text | ${reviewResult.elapsed || 0}s${reviewResult.error ? ' ERR:' + reviewResult.error : ''}`);
 
-        // Write immediately
+        // Write complete record
         const merged = { ...place, detailedReviews: reviewResult.reviews };
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
 
@@ -157,7 +170,22 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
       } catch (err) {
         log(`  ERROR: ${err.message}`);
-        fs.appendFileSync(outputFile, JSON.stringify({ ...place, detailedReviews: [], _error: err.message }) + '\n');
+
+        // Try to recover partial reviews from flush file
+        let partialReviews = [];
+        const partialFile = outputFile + '.partial.' + pid.replace(/[^a-z0-9]/gi, '_');
+        if (fs.existsSync(partialFile)) {
+          try {
+            const partialLines = fs.readFileSync(partialFile, 'utf8').trim().split('\n');
+            partialReviews = partialLines.filter(l => l).map(l => JSON.parse(l));
+            log(`  Recovered ${partialReviews.length} reviews from partial file`);
+            try { fs.unlinkSync(partialFile); } catch (e) {}
+          } catch (e) {}
+        }
+
+        const merged = { ...place, detailedReviews: partialReviews, _error: err.message };
+        fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
+        totalReviews += partialReviews.length;
         totalErrors++;
       } finally {
         await page.close().catch(() => {});
