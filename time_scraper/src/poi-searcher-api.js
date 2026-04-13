@@ -209,11 +209,29 @@ async function fetchCellPlaceIds(page, query, lat, lng, altitude, pbTemplate) {
       for (const item of rawPlaces) {
         const p = item && item[1];
         if (!p || !p[10]) continue;
-        ftids.push(p[10]);
+        const ftid = p[10];
+        ftids.push(ftid);
+
+        // Extract full place info from tbm=map response
+        const phone = p[178] && p[178][0] && p[178][0][0] || null;
         places.push({
-          ftid: p[10],
+          ftid,
+          chijId: p[78] || null,
           lat: p[9] ? p[9][2] : null,
           lng: p[9] ? p[9][3] : null,
+          name: p[11] || null,
+          address: p[2] || null,
+          fullAddress: p[18] || null,
+          rating: p[4] ? p[4][7] : null,
+          reviewCount: p[4] ? p[4][8] : null,
+          priceRange: p[4] ? p[4][2] : null,
+          categories: p[13] || null,
+          mainCategory: p[13] && p[13][0] || null,
+          neighborhood: p[14] || null,
+          website: p[7] && p[7][1] || null,
+          phone,
+          timezone: p[30] || null,
+          plusCode: null, // not in tbm=map
         });
       }
       return { ftids: [...new Set(ftids)], places, bytes: text.length };
@@ -251,12 +269,13 @@ async function fetchCellPlaceIds(page, query, lat, lng, altitude, pbTemplate) {
  * @param {Object} bbox - Bounding box {centerLat, centerLng, sizeKm, ...}
  * @param {string} pbTemplate - Captured pb= template
  * @param {Set} globalIds - Global set of seen place_ids (for dedup)
+ * @param {Map} placeStore - Global map of ftid → place data (for collecting full info)
  * @param {Object} stats - Running statistics
  * @param {number} depth - Current recursion depth
  * @param {Object} opts - Config overrides
  * @returns {Promise<string[]>} Array of new place_ids found in this cell
  */
-async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth = 0, opts = {}) {
+async function searchCell(page, query, bbox, pbTemplate, globalIds, placeStore, stats, depth = 0, opts = {}) {
   const maxDepth = opts.maxDepth ?? CONFIG.maxDepth;
   const threshold = opts.subdivideThreshold ?? CONFIG.subdivideThreshold;
   const delayMs = opts.requestDelayMs ?? CONFIG.requestDelayMs;
@@ -281,13 +300,19 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
     return [];
   }
 
-  // Collect new IDs
+  // Collect new IDs and place data
   const newIds = [];
   for (const id of result.ftids) {
     if (!globalIds.has(id)) {
       globalIds.add(id);
       newIds.push(id);
       stats.totalIds++;
+    }
+  }
+  // Store full place data (first seen wins — closest to search center)
+  for (const place of result.places) {
+    if (place.ftid && !placeStore.has(place.ftid)) {
+      placeStore.set(place.ftid, place);
     }
   }
 
@@ -345,7 +370,7 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
     const quads = subdivideBBox(bbox);
     for (const quad of quads) {
       await page.waitForTimeout(delayMs);
-      const subIds = await searchCell(page, query, quad, pbTemplate, globalIds, stats, depth + 1, opts);
+      const subIds = await searchCell(page, query, quad, pbTemplate, globalIds, placeStore, stats, depth + 1, opts);
       newIds.push(...subIds);
     }
   } else {
@@ -373,10 +398,16 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
  */
 async function batchSearchPOIs(browser, points, categories, options = {}, progressCallback = null) {
   const allPlaceIds = new Set();
+  const placeStore = new Map(); // ftid → full place data
   const results = [];
 
-  // Resume support
+  // Places file: same directory as incrementalSaveFile, named places.ndjson
   const incrementalSaveFile = options.incrementalSaveFile;
+  const placesFile = incrementalSaveFile
+    ? incrementalSaveFile.replace(/[^/]+$/, 'places.ndjson')
+    : null;
+
+  // Resume support
   const completedCategories = new Set();
   let resumedIds = 0;
 
@@ -398,6 +429,23 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       }
     } catch (e) {
       console.warn(`[QUADTREE] Resume load failed: ${e.message}`);
+    }
+  }
+  // Resume placeStore from places.ndjson
+  if (placesFile && fs.existsSync(placesFile)) {
+    try {
+      const lines = fs.readFileSync(placesFile, 'utf8').trim().split('\n');
+      for (const line of lines) {
+        if (!line) continue;
+        const p = JSON.parse(line);
+        if (p._meta && p._meta.placeId) {
+          placeStore.set(p._meta.placeId, p);
+          allPlaceIds.add(p._meta.placeId);
+        }
+      }
+      console.log(`[QUADTREE] Resumed ${placeStore.size} places from ${placesFile}`);
+    } catch (e) {
+      console.warn(`[QUADTREE] Places resume failed: ${e.message}`);
     }
   }
 
@@ -481,7 +529,7 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
         }
       };
 
-      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, stats, 0, {
+      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, 0, {
         ...options,
         onProgress,
       });
@@ -500,7 +548,7 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       console.log(`[QUADTREE] ${category}: +${catNewIds} new POIs (${stats.requests} requests, ${elapsed}s)`);
       console.log(`[QUADTREE] Running total: ${allPlaceIds.size} unique POIs`);
 
-      // Incremental save
+      // Incremental save — poi_search.json (metadata)
       if (incrementalSaveFile) {
         const saveData = {
           timestamp: new Date().toISOString(),
@@ -518,6 +566,51 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
           console.warn(`[QUADTREE] Save failed: ${e.message}`);
         }
       }
+
+      // Incremental save — places.ndjson (full place data, one line per place)
+      // This file is the input for review scraping — same format as scraper output
+      if (placesFile) {
+        try {
+          const lines = [];
+          for (const [ftid, p] of placeStore) {
+            const record = {
+              extractedAt: new Date().toISOString(),
+              sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
+              business: {
+                name: p.name,
+                address: p.address,
+                fullAddress: p.fullAddress,
+                coordinates: (p.lat != null && p.lng != null) ? { lat: p.lat, lng: p.lng } : null,
+                latitude: p.lat,
+                longitude: p.lng,
+                placeId: ftid,
+                categories: p.categories,
+                mainCategory: p.mainCategory,
+                rating: p.rating,
+                reviewCount: p.reviewCount,
+                priceRange: p.priceRange,
+                phone: p.phone,
+                website: p.website,
+                plusCode: p.plusCode,
+              },
+              _meta: {
+                placeId: ftid,
+                chijId: p.chijId,
+                sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
+                neighborhood: p.neighborhood,
+                timezone: p.timezone,
+              },
+            };
+            lines.push(JSON.stringify(record));
+          }
+          const tmp = placesFile + '.tmp';
+          fs.writeFileSync(tmp, lines.join('\n') + '\n', 'utf8');
+          fs.renameSync(tmp, placesFile);
+          console.log(`[QUADTREE] Saved ${placeStore.size} places to ${placesFile}`);
+        } catch (e) {
+          console.warn(`[QUADTREE] Places save failed: ${e.message}`);
+        }
+      }
     }
 
   } finally {
@@ -528,6 +621,7 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
   return {
     totalPlaceIds: allPlaceIds.size,
     uniquePlaceIds: Array.from(allPlaceIds),
+    placesFile: placesFile || null,
     results,
     searchArea: { ...bbox },
   };
