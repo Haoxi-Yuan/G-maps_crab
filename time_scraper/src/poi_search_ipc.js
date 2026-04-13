@@ -152,6 +152,7 @@ function parseArgs(argv) {
       case '--lang': case '--hl': opts.lang = argv[++i]; break;
       case '--checkpoint': opts.checkpoint = argv[++i]; break;
       case '--select-categories': opts.selectCategories = argv[++i]; break;
+      case '--mode': opts.mode = argv[++i]; break; // 'api' (quadtree) or 'dom' (legacy scroll)
     }
   }
 
@@ -184,7 +185,10 @@ async function main() {
   ipcStatus('starting');
   TASK_STATS.startedAt = Date.now();
 
-  const poiSearcher = require('./poi-searcher');
+  // Select searcher mode: 'api' (quadtree, default) or 'dom' (legacy scroll)
+  const mode = opts.mode || 'api';
+  const poiSearcher = mode === 'api' ? require('./poi-searcher-api') : require('./poi-searcher');
+  ipcLog('info', `POI search mode: ${mode} (${mode === 'api' ? 'quadtree + tbm=map' : 'DOM scroll'})`);
 
   // Load points
   let points;
@@ -199,13 +203,15 @@ async function main() {
 
   ipcLog('info', `Loaded ${points.length} sampling points from ${opts.pointsFile}`);
 
-  // Apply start/limit for parallel splitting
-  if (opts.startIndex > 0) {
-    ipcLog('info', `Applying start offset: skipping first ${opts.startIndex} points`);
-    points = points.slice(opts.startIndex);
-  }
-  if (opts.limit && opts.limit < points.length) {
-    points = points.slice(0, opts.limit);
+  // Apply start/limit for parallel splitting (DOM mode only — API uses bounding box)
+  if (mode === 'dom') {
+    if (opts.startIndex > 0) {
+      ipcLog('info', `Applying start offset: skipping first ${opts.startIndex} points`);
+      points = points.slice(opts.startIndex);
+    }
+    if (opts.limit && opts.limit < points.length) {
+      points = points.slice(0, opts.limit);
+    }
   }
 
   ipcLog('info', `Processing ${points.length} points`);
