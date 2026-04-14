@@ -273,9 +273,73 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           }
         } catch (e) {}
 
+        // Photos from [37] (primary) and [105] (gallery)
+        let photos = null;
+        try {
+          const extractPhotoUrls = (arr) => {
+            const urls = [];
+            const str = JSON.stringify(arr);
+            const matches = str.match(/https:\/\/lh[0-9]\.googleusercontent\.com\/[^"]+/g);
+            if (matches) {
+              for (const url of matches) {
+                if (!url.includes('/s44-') && !url.includes('-k-no-ns-nd')) { // skip tiny thumbnails/avatars
+                  urls.push(url);
+                }
+              }
+            }
+            return [...new Set(urls)];
+          };
+          const primaryPhotos = p[37] ? extractPhotoUrls(p[37]) : [];
+          const galleryPhotos = p[105] ? extractPhotoUrls(p[105]) : [];
+          const allPhotos = [...new Set([...primaryPhotos, ...galleryPhotos])];
+          if (allPhotos.length > 0) photos = allPhotos;
+        } catch (e) {}
+
+        // Owner info from [57]
+        let ownerInfo = null;
+        try {
+          if (p[57] && p[57][1]) {
+            ownerInfo = { name: p[57][1], id: p[57][2] || null };
+          }
+        } catch (e) {}
+
+        // Category IDs (machine-readable) from [76]
+        let categoryIds = null;
+        try {
+          if (p[76] && Array.isArray(p[76])) {
+            categoryIds = p[76].map(c => Array.isArray(c) ? { id: c[0], label: c[1] } : null).filter(Boolean);
+          }
+        } catch (e) {}
+
+        // Google short link from [89]
+        const googleId = p[89] || null;
+
+        // Identity badges from [196] (LGBTQ+ friendly, Women-owned, etc.)
+        let identityBadges = null;
+        try {
+          if (p[196] && Array.isArray(p[196][1])) {
+            identityBadges = p[196][1].map(b => Array.isArray(b) && b[1] ? b[1][0] : null).filter(Boolean);
+            if (identityBadges.length === 0) identityBadges = null;
+          }
+        } catch (e) {}
+
+        // Service options from [142] (Dine-in, Takeaway, Delivery)
+        let serviceOptions = null;
+        try {
+          const raw142 = p[142];
+          if (raw142 && raw142[1] && raw142[1][0] && raw142[1][0][6]) {
+            const opts = raw142[1][0][6][0];
+            if (Array.isArray(opts)) {
+              serviceOptions = opts.map(o => Array.isArray(o) && o[0] ? o[0][0] : null).filter(Boolean);
+              if (serviceOptions.length === 0) serviceOptions = null;
+            }
+          }
+        } catch (e) {}
+
         places.push({
           ftid: p[10],
           chijId: p[78] || null,
+          googleId,
           lat: p[9] ? p[9][2] : null,
           lng: p[9] ? p[9][3] : null,
           name: p[11] || null,
@@ -285,6 +349,7 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           reviewCount: p[4] ? p[4][8] : null,
           priceRange: p[4] ? p[4][2] : null,
           categories: p[13] || null,
+          categoryIds,
           mainCategory: p[13] && p[13][0] || null,
           neighborhood: p[14] || null,
           website: p[7] && p[7][1] || null,
@@ -294,6 +359,10 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           openingHours,
           about,
           popularTimes,
+          photos,
+          ownerInfo,
+          identityBadges,
+          serviceOptions,
           plusCode: null,
         });
       }
@@ -619,15 +688,24 @@ function savePOIData(incrementalSaveFile, placesFile, allPlaceIds, placeStore, r
             name: p.name, address: p.address, fullAddress: p.fullAddress,
             coordinates: (p.lat != null && p.lng != null) ? { lat: p.lat, lng: p.lng } : null,
             latitude: p.lat, longitude: p.lng, placeId: ftid,
-            categories: p.categories, mainCategory: p.mainCategory,
+            categories: p.categories, categoryIds: p.categoryIds || null,
+            mainCategory: p.mainCategory,
             rating: p.rating, reviewCount: p.reviewCount, priceRange: p.priceRange,
             phone: p.phone, website: p.website, plusCode: p.plusCode || null,
+            photos: p.photos || null,
+            ownerInfo: p.ownerInfo || null,
+            serviceOptions: p.serviceOptions || null,
+            identityBadges: p.identityBadges || null,
           },
           openingHours: p.openingHours || null,
           popularTimes: p.popularTimes || null,
           about: p.about || null,
           metadata: { description: p.description || null },
-          _meta: { placeId: ftid, chijId: p.chijId, sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`, neighborhood: p.neighborhood, timezone: p.timezone },
+          _meta: {
+            placeId: ftid, chijId: p.chijId, googleId: p.googleId || null,
+            sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
+            neighborhood: p.neighborhood, timezone: p.timezone,
+          },
         };
         lines.push(JSON.stringify(record));
       }
