@@ -298,12 +298,25 @@ run_direct() {
 
   local pc=$(python3 -c "import json; print(len(json.load(open('$POINTS_FILE'))))" 2>/dev/null || echo "?")
 
+  # Find boundary file for post-filter
+  local BOUNDARY_FILE=$(ls "${CITY_DIR}/"*_boundary.geojson 2>/dev/null | head -1)
+  local PLACES_FILE="$(dirname "$OUTPUT_FILE")/places.ndjson"
+  local FILTER_CMD=""
+  if [ -n "$BOUNDARY_FILE" ]; then
+    FILTER_CMD="node src/filter-by-boundary.js --input '$PLACES_FILE' --boundary '$BOUNDARY_FILE'"
+  fi
+
   if [ "$RUN_MODE" = "foreground" ]; then
     echo ""
     echo "Starting POI search (foreground)..."
     echo "  City: $CITY_NAME | Points: $pc | Output: $OUTPUT_FILE"
     echo ""
     eval "$NODE_CMD" 2>&1 | tee "$LOG_FILE"
+    if [ -n "$FILTER_CMD" ] && [ -f "$PLACES_FILE" ]; then
+      echo ""
+      echo "Filtering by boundary..."
+      eval "$FILTER_CMD"
+    fi
   else
     # Background mode (default)
     echo ""
@@ -315,7 +328,11 @@ run_direct() {
     echo ""
 
     mkdir -p "$(dirname "$OUTPUT_FILE")"
-    nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+    if [ -n "$FILTER_CMD" ]; then
+      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD && echo '' && echo 'Filtering by boundary...' && $FILTER_CMD" > "$LOG_FILE" 2>&1 &
+    else
+      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+    fi
     local PID=$!
 
     echo "  PID:     $PID"
@@ -504,14 +521,34 @@ step_launch() {
 
   mkdir -p "$(dirname "$OUTPUT_FILE")"
 
+  # Find boundary file for post-filter
+  local BOUNDARY_FILE=$(ls "${CITY_DIR}/"*_boundary.geojson 2>/dev/null | head -1)
+  local PLACES_FILE="${OUTPUT_FILE%.json}/../places.ndjson"
+  PLACES_FILE="$(dirname "$OUTPUT_FILE")/places.ndjson"
+  local FILTER_CMD=""
+  if [ -n "$BOUNDARY_FILE" ]; then
+    FILTER_CMD="node src/filter-by-boundary.js --input '$PLACES_FILE' --boundary '$BOUNDARY_FILE'"
+  fi
+
   if [ "$BG_CHOICE" = "n" ] || [ "$BG_CHOICE" = "N" ]; then
     echo ""
     echo "Starting (foreground, Ctrl+C to stop)..."
     echo ""
     eval "$NODE_CMD" 2>&1 | tee "$LOG_FILE"
+    # Post-filter by boundary
+    if [ -n "$FILTER_CMD" ] && [ -f "$PLACES_FILE" ]; then
+      echo ""
+      echo "Filtering by boundary..."
+      eval "$FILTER_CMD"
+    fi
   else
     echo ""
-    nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+    # Background: chain search + filter
+    if [ -n "$FILTER_CMD" ]; then
+      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD && echo '' && echo 'Filtering by boundary...' && $FILTER_CMD" > "$LOG_FILE" 2>&1 &
+    else
+      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+    fi
     local PID=$!
     echo "Started in background (PID: $PID)"
     echo ""
