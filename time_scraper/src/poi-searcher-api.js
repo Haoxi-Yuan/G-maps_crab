@@ -193,7 +193,7 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
         try {
           const rawHours = p[203];
           if (rawHours && Array.isArray(rawHours[0])) {
-            const currentStatus = rawHours[1] && rawHours[1][3] && rawHours[1][3][0] || null;
+            const currentStatus = (rawHours[1] && rawHours[1][4] && rawHours[1][4][0]) || null;
             const weeklyHours = [];
             for (const day of rawHours[0]) {
               if (!Array.isArray(day)) continue;
