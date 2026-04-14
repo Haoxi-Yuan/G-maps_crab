@@ -342,18 +342,24 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           }
         } catch (e) {}
 
-        // Service options from [142] (Dine-in, Takeaway, Delivery)
+        // Service options: extract from about's "Service options" group (more complete than [142])
         let serviceOptions = null;
-        try {
-          const raw142 = p[142];
-          if (raw142 && raw142[1] && raw142[1][0] && raw142[1][0][6]) {
-            const opts = raw142[1][0][6][0];
-            if (Array.isArray(opts)) {
-              serviceOptions = opts.map(o => Array.isArray(o) && o[0] ? o[0][0] : null).filter(Boolean);
-              if (serviceOptions.length === 0) serviceOptions = null;
+        if (about && about['Service options']) {
+          serviceOptions = about['Service options'];
+        }
+        // Fallback to [142] if about didn't have it
+        if (!serviceOptions) {
+          try {
+            const raw142 = p[142];
+            if (raw142 && raw142[1] && raw142[1][0] && raw142[1][0][6]) {
+              const opts = raw142[1][0][6][0];
+              if (Array.isArray(opts)) {
+                serviceOptions = opts.map(o => Array.isArray(o) && o[0] ? o[0][0] : null).filter(Boolean);
+                if (serviceOptions.length === 0) serviceOptions = null;
+              }
             }
-          }
-        } catch (e) {}
+          } catch (e) {}
+        }
 
         places.push({
           ftid: p[10],
