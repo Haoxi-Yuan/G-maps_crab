@@ -168,6 +168,111 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
         const p = item && item[1];
         if (!p || !p[10]) continue;
         const phone = p[178] && p[178][0] && p[178][0][0] || null;
+
+        // Opening hours from [203]
+        let openingHours = null;
+        try {
+          const rawHours = p[203];
+          if (rawHours && Array.isArray(rawHours[0])) {
+            const currentStatus = rawHours[1] && rawHours[1][3] && rawHours[1][3][0] || null;
+            const weeklyHours = [];
+            for (const day of rawHours[0]) {
+              if (!Array.isArray(day)) continue;
+              const dayName = day[0];
+              const hours = day[3] ? day[3].map(h => h[0]).join(', ') : 'Closed';
+              const openHour = day[3] && day[3][0] && day[3][0][1] && day[3][0][1][0] ? day[3][0][1][0][0] : null;
+              const closeHour = day[3] && day[3][0] && day[3][0][1] && day[3][0][1][1] ? day[3][0][1][1][0] : null;
+              weeklyHours.push({ day: dayName, hours, openHour, closeHour });
+            }
+            openingHours = { currentStatus, weeklyHours };
+          }
+        } catch (e) {}
+
+        // About/attributes from [100]
+        let about = null;
+        try {
+          const rawAbout = p[100];
+          if (rawAbout && Array.isArray(rawAbout)) {
+            about = {};
+            for (const section of rawAbout) {
+              if (!Array.isArray(section)) continue;
+              // Each section is either:
+              //   [key, label, items] — a flat attribute
+              //   [[subSection1], [subSection2], ...] — grouped sections
+              if (section[0] && Array.isArray(section[0]) && typeof section[0][0] === 'string' && section[0][0].startsWith('/geo/')) {
+                // Single flat attribute: ["/geo/...", "Label", ...]
+                const label = section[0][1] || '';
+                if (label) {
+                  if (!about['Highlights']) about['Highlights'] = [];
+                  about['Highlights'].push(label);
+                }
+              } else {
+                // Grouped: iterate sub-sections
+                for (const sub of section) {
+                  if (!Array.isArray(sub)) continue;
+                  const groupKey = sub[0];
+                  const groupLabel = sub[1];
+                  if (typeof groupKey === 'string' && typeof groupLabel === 'string' && Array.isArray(sub[2])) {
+                    // [key, label, [[attr], [attr], ...]]
+                    const items = [];
+                    for (const attr of sub[2]) {
+                      if (Array.isArray(attr) && attr[1]) items.push(attr[1]);
+                    }
+                    if (items.length > 0) about[groupLabel] = items;
+                  } else if (typeof groupKey === 'string' && groupKey.startsWith('/geo/') && sub[1]) {
+                    // Flat attr inside group
+                    if (!about['Highlights']) about['Highlights'] = [];
+                    about['Highlights'].push(sub[1]);
+                  }
+                }
+              }
+            }
+            if (Object.keys(about).length === 0) about = null;
+          }
+        } catch (e) {}
+
+        // Description from [32]
+        let description = null;
+        try {
+          if (p[32] && Array.isArray(p[32])) {
+            // [32][0][1] = short description, [32][1][1] = long description
+            description = (p[32][1] && p[32][1][1]) || (p[32][0] && p[32][0][1]) || null;
+          }
+        } catch (e) {}
+
+        // Popular times from [24] (numeric format)
+        let popularTimes = null;
+        try {
+          const rawPop = p[245];
+          if (rawPop && Array.isArray(rawPop[0])) {
+            popularTimes = { weeklyData: [] };
+            const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+            const popData = rawPop[0];
+            if (Array.isArray(popData)) {
+              for (const dayData of popData) {
+                if (!Array.isArray(dayData) || !Array.isArray(dayData[1])) continue;
+                const dayIdx = dayData[0];
+                const hourlyData = [];
+                for (const hourEntry of dayData[1]) {
+                  if (Array.isArray(hourEntry)) {
+                    hourlyData.push({
+                      hour: hourEntry[0],
+                      popularity: hourEntry[1] || 0,
+                    });
+                  }
+                }
+                if (hourlyData.length > 0) {
+                  popularTimes.weeklyData.push({
+                    day: dayNames[dayIdx] || `Day${dayIdx}`,
+                    hourlyData,
+                  });
+                }
+              }
+            }
+            if (popularTimes.weeklyData.length === 0) popularTimes = null;
+          }
+        } catch (e) {}
+
         places.push({
           ftid: p[10],
           chijId: p[78] || null,
@@ -185,6 +290,11 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           website: p[7] && p[7][1] || null,
           phone,
           timezone: p[30] || null,
+          description,
+          openingHours,
+          about,
+          popularTimes,
+          plusCode: null,
         });
       }
       return { places };
@@ -511,8 +621,12 @@ function savePOIData(incrementalSaveFile, placesFile, allPlaceIds, placeStore, r
             latitude: p.lat, longitude: p.lng, placeId: ftid,
             categories: p.categories, mainCategory: p.mainCategory,
             rating: p.rating, reviewCount: p.reviewCount, priceRange: p.priceRange,
-            phone: p.phone, website: p.website, plusCode: null,
+            phone: p.phone, website: p.website, plusCode: p.plusCode || null,
           },
+          openingHours: p.openingHours || null,
+          popularTimes: p.popularTimes || null,
+          about: p.about || null,
+          metadata: { description: p.description || null },
           _meta: { placeId: ftid, chijId: p.chijId, sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`, neighborhood: p.neighborhood, timezone: p.timezone },
         };
         lines.push(JSON.stringify(record));
