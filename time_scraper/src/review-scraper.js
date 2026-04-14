@@ -118,6 +118,15 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
       try {
         const isFtid = pid.startsWith('0x');
 
+        // Capture preview/place response for popularTimes
+        let previewData = null;
+        const previewHandler = async (resp) => {
+          if (resp.url().includes('/maps/preview/place')) {
+            try { const t = await resp.text(); previewData = t; } catch(e) {}
+          }
+        };
+        page.on('response', previewHandler);
+
         // Two-step load
         log('  Loading page...');
         await page.goto(`https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${pid}`, {
@@ -131,6 +140,8 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
         await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
         await page.waitForTimeout(2000);
+
+        page.off('response', previewHandler);
 
         // Fetch reviews with incremental flush to prevent data loss
         log('  Fetching reviews...');
@@ -161,8 +172,50 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         const coverage = expected > 0 ? Math.round(fetched / expected * 100) + '%' : '-';
         log(`  DONE: ${fetched}/${expected} (${coverage}) | ${reviewResult.withText || 0} text | ${reviewResult.elapsed || 0}s${reviewResult.error ? ' ERR:' + reviewResult.error : ''}`);
 
-        // Write complete record
+        // Extract popularTimes from preview/place response (if available)
+        let popularTimes = null;
+        if (previewData) {
+          try {
+            const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+            // Parse hourly entries: [hour, pct, "busyLabel", "waitLabel", "timeLabel", ...]
+            const hourPattern = /\[(\d+),(\d+),"([^"]*)","([^"]*)","([^"]*)"/g;
+            const allHours = [];
+            let hm;
+            while ((hm = hourPattern.exec(previewData)) !== null) {
+              allHours.push({ hour: parseInt(hm[1]), popularity: parseInt(hm[2]), timeLabel: hm[5] });
+            }
+            // Split into days (each day has ~18-24 consecutive hourly entries starting from 6am)
+            if (allHours.length >= 18) {
+              popularTimes = { weeklyData: [] };
+              let dayHours = [];
+              let prevHour = -1;
+              for (const h of allHours) {
+                if (h.hour <= prevHour && dayHours.length >= 10) {
+                  // New day started
+                  popularTimes.weeklyData.push({
+                    day: dayNames[popularTimes.weeklyData.length % 7],
+                    hourlyData: dayHours,
+                  });
+                  dayHours = [];
+                }
+                dayHours.push(h);
+                prevHour = h.hour;
+              }
+              if (dayHours.length >= 10) {
+                popularTimes.weeklyData.push({
+                  day: dayNames[popularTimes.weeklyData.length % 7],
+                  hourlyData: dayHours,
+                });
+              }
+              if (popularTimes.weeklyData.length === 0) popularTimes = null;
+              else log(`  Popular times: ${popularTimes.weeklyData.length} days`);
+            }
+          } catch (e) {}
+        }
+
+        // Write complete record — merge place data + reviews + popularTimes
         const merged = { ...place, detailedReviews: reviewResult.reviews };
+        if (popularTimes) merged.popularTimes = popularTimes;
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
 
         totalReviews += fetched;
