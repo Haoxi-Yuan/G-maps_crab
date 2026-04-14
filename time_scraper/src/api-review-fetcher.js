@@ -220,15 +220,13 @@ async function fetchAllReviews(page, opts = {}) {
           }
         }
 
-        // Owner response: typically in r[3] or r[1][14] area
-        let ownerResponse = null;
-        if (r[3] && Array.isArray(r[3]) && r[3].length > 0) {
-          // r[3] sometimes contains owner response as nested array with text
-          try {
-            const resp = r[3][0];
-            if (typeof resp === 'string') ownerResponse = resp;
-            else if (Array.isArray(resp) && typeof resp[0] === 'string') ownerResponse = resp[0];
-          } catch (e) {}
+        // Owner response: r[3] contains reply metadata (no text in this API)
+        // r[3][1] = reply timestamp (microseconds), r[3][3] = relative time ("5 months ago")
+        let ownerResponseAgo = null;
+        let hasOwnerResponse = false;
+        if (r[3] && Array.isArray(r[3]) && r[3][1]) {
+          hasOwnerResponse = true;
+          ownerResponseAgo = r[3][3] || null; // e.g. "5 months ago"
         }
 
         reviews.push({
@@ -245,8 +243,9 @@ async function fetchAllReviews(page, opts = {}) {
           reviewer_review_count: reviewerInfo[4]?.[5]?.[5] || null,
           is_local_guide: !!(reviewerInfo[4]?.[5]?.[8]?.[0]),
           review_likes_count: reviewerInfo[15] || 0,
-          response_from_owner_text: ownerResponse,
-          response_from_owner_ago: null,
+          response_from_owner_text: null, // Not available in listugcposts API
+          response_from_owner_ago: ownerResponseAgo,
+          has_owner_response: hasOwnerResponse || undefined,
           review_images: photos.length > 0 ? photos : undefined,
           _source: 'api',
         });
