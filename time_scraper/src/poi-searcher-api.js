@@ -18,6 +18,25 @@
  */
 
 const fs = require('fs');
+const { ringContains, pointInPolygon, pointInMultiPolygon } = require('./filter-by-boundary');
+
+// ============================================
+// Boundary pre-filter (skip cells outside boundary)
+// ============================================
+
+function loadBoundaryCheck(boundaryFile) {
+  if (!boundaryFile || !fs.existsSync(boundaryFile)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(boundaryFile, 'utf8'));
+    let geom;
+    if (data.type === 'FeatureCollection') geom = data.features[0].geometry;
+    else if (data.type === 'Feature') geom = data.geometry;
+    else geom = data;
+    if (geom.type === 'MultiPolygon') return (lat, lng) => pointInMultiPolygon(lat, lng, geom.coordinates);
+    if (geom.type === 'Polygon') return (lat, lng) => pointInPolygon(lat, lng, geom.coordinates);
+  } catch (e) {}
+  return null;
+}
 
 // ============================================
 // Configuration
@@ -435,6 +454,13 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, placeStore, 
   const minCell = opts.minCellSizeKm ?? CONFIG.minCellSizeKm;
   const delayMs = opts.requestDelayMs ?? CONFIG.requestDelayMs;
   const onProgress = opts.onProgress || null;
+  const boundaryCheck = opts._boundaryCheck || null;
+
+  // Skip cells whose center is outside the boundary (saves ~30% requests for border cities)
+  if (boundaryCheck && !boundaryCheck(bbox.centerLat, bbox.centerLng)) {
+    stats.skippedOutside = (stats.skippedOutside || 0) + 1;
+    return [];
+  }
 
   const zoom = cellSizeToZoom(bbox.sizeKm);
   const altitude = calculateAltitude(zoom, bbox.centerLat);
@@ -493,8 +519,13 @@ async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, placeStor
   const startBefore = globalIds.size;
   let cellCount = 0;
 
+  const boundaryCheck = opts._boundaryCheck || null;
+
   for (let lat = bbox.minLat + offsetLat; lat <= bbox.maxLat; lat += stepLat) {
     for (let lng = bbox.minLng + offsetLng; lng <= bbox.maxLng; lng += stepLng) {
+      // Skip cells outside boundary
+      if (boundaryCheck && !boundaryCheck(lat, lng)) continue;
+
       const { newIds } = await fetchCellPaginated(
         page, query, lat, lng, altitude, pbTemplate,
         globalIds, placeStore, stats, opts
@@ -590,6 +621,13 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
     const pbTemplate = await capturePbTemplate(page, firstCategory, bbox.centerLat, bbox.centerLng);
     console.log(`[QUADTREE] pb template captured (${pbTemplate.length} chars)`);
 
+    // Load boundary for pre-filtering cells
+    const boundaryFile = options.boundaryFile || null;
+    const boundaryCheck = loadBoundaryCheck(boundaryFile);
+    if (boundaryCheck) {
+      console.log(`[QUADTREE] Boundary pre-filter loaded from ${boundaryFile}`);
+    }
+
     let catIndex = 0;
     const totalCategories = categories.length;
 
@@ -621,12 +659,12 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       };
 
       // Phase 1: Quadtree with pagination
-      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, 0, { ...options, onProgress });
+      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, 0, { ...options, onProgress, _boundaryCheck: boundaryCheck });
 
       // Phase 2: Offset grid pass
       if (options.enableOffsetGrid !== false && CONFIG.enableOffsetGrid) {
         console.log(`  [offset] Running offset grid pass...`);
-        await runOffsetGrid(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, { ...options, onProgress });
+        await runOffsetGrid(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, { ...options, onProgress, _boundaryCheck: boundaryCheck });
       }
 
       const elapsed = Math.round((Date.now() - startTime) / 1000);

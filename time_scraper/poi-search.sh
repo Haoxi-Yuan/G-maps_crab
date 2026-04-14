@@ -258,6 +258,7 @@ const api = require('./src/poi-searcher-api');
       minCellSizeKm: ${MIN_CELL},
       saveInterval: ${SAVE_INTERVAL},
       incrementalSaveFile: '${OUTPUT_FILE}',
+      boundaryFile: '${BOUNDARY_FILE}',
     });
     console.log('');
     console.log('=== COMPLETED ===');
