@@ -119,32 +119,56 @@ print(f'{d.get(\"totalPlaceIds\",0)} POIs | {len(cats)}/{total_cats} categories'
 }
 
 stop_background() {
-  local pattern="poi-searcher-api"
-  if [ -n "$STOP_CITY" ]; then
-    pattern="poi-searcher-api.*${STOP_CITY}\|${STOP_CITY}.*poi-searcher"
-    echo "Stopping POI search for: $STOP_CITY"
-  else
-    echo "Stopping ALL POI search processes"
-  fi
-
-  local pids=$(pgrep -f "$pattern" 2>/dev/null || true)
-  if [ -z "$pids" ]; then
-    echo "No matching processes found."
+  local all_pids=$(pgrep -f "poi-searcher-api" 2>/dev/null || true)
+  if [ -z "$all_pids" ]; then
+    echo "No running POI search processes found."
     return
   fi
-  for pid in $pids; do
+
+  echo ""
+  echo "Running POI search processes:"
+  echo ""
+  local i=1
+  local PID_LIST=()
+  for pid in $all_pids; do
     local cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -1)
-    echo "  Stopping PID $pid: ${cmd:0:80}"
+    local elapsed=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
+    local city=$(echo "$cmd" | grep -oP 'output/\K[^/]+' | head -1)
+    printf "  [%d] PID %-8s %-20s (elapsed: %s)\n" "$i" "$pid" "${city:-unknown}" "$elapsed"
+    PID_LIST+=("$pid")
+    i=$((i + 1))
+  done
+
+  echo ""
+  echo "  [a] Stop ALL"
+  echo "  [q] Cancel"
+  echo ""
+  read -p "Select> " CHOICE
+
+  if [ "$CHOICE" = "q" ]; then return; fi
+
+  local targets=()
+  if [ "$CHOICE" = "a" ] || [ "$CHOICE" = "A" ]; then
+    targets=("${PID_LIST[@]}")
+  elif [[ "$CHOICE" =~ ^[0-9]+$ ]] && [ "$CHOICE" -ge 1 ] && [ "$CHOICE" -le ${#PID_LIST[@]} ]; then
+    targets=("${PID_LIST[$((CHOICE - 1))]}")
+  else
+    echo "Invalid selection."
+    return
+  fi
+
+  for pid in "${targets[@]}"; do
+    echo "Stopping PID $pid..."
     kill "$pid" 2>/dev/null || true
   done
   sleep 2
-  local remaining=$(pgrep -f "$pattern" 2>/dev/null || true)
-  if [ -n "$remaining" ]; then
-    for pid in $remaining; do
+  for pid in "${targets[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "Force killing PID $pid..."
       kill -9 "$pid" 2>/dev/null || true
-    done
-  fi
-  echo "Done. Progress has been saved to the output file."
+    fi
+  done
+  echo "Done. Progress saved."
 }
 
 # ============================================
