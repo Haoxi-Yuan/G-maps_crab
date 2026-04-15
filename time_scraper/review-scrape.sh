@@ -29,7 +29,7 @@ parse_args() {
       --min-count)     MIN_REVIEW_COUNT="$2"; shift 2 ;;
       --fresh)         FRESH=1; shift ;;
       --status)        show_status; exit 0 ;;
-      --stop)          stop_background; exit 0 ;;
+      --stop)          STOP_CITY="${2:-}"; stop_background; exit 0 ;;
       --help)          show_help; exit 0 ;;
       *)               echo "Unknown option: $1"; show_help; exit 1 ;;
     esac
@@ -102,21 +102,28 @@ print(total)
 }
 
 stop_background() {
-  local pids=$(pgrep -f "review-scraper" 2>/dev/null || true)
+  local pattern="review-scraper"
+  if [ -n "$STOP_CITY" ]; then
+    pattern="review-scraper.*${STOP_CITY}"
+    echo "Stopping review-scraper for: $STOP_CITY"
+  else
+    echo "Stopping ALL review-scraper processes"
+  fi
+
+  local pids=$(pgrep -f "$pattern" 2>/dev/null || true)
   if [ -z "$pids" ]; then
-    echo "No running review scrape processes found."
+    echo "No matching processes found."
     return
   fi
   for pid in $pids; do
-    echo "Stopping PID $pid..."
+    local cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -1)
+    echo "  Stopping PID $pid: ${cmd:0:80}"
     kill "$pid" 2>/dev/null || true
   done
   sleep 2
-  # Force kill if still running
-  local remaining=$(pgrep -f "review-scraper" 2>/dev/null || true)
+  local remaining=$(pgrep -f "$pattern" 2>/dev/null || true)
   if [ -n "$remaining" ]; then
     for pid in $remaining; do
-      echo "Force killing PID $pid..."
       kill -9 "$pid" 2>/dev/null || true
     done
   fi
