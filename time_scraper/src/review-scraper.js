@@ -293,26 +293,31 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     logStream.write(line + '\n');
   };
 
-  // Read input: index placeId + byte offset per line (lightweight)
-  // Full place data is read per-line on demand using byte offsets to avoid OOM
+  // Read input: index placeId + byte offset per line using streaming (no full-file load)
   const placeIndex = []; // [{pid, name, expected, byteStart, byteEnd}]
-  let inputMtime = fs.statSync(inputFile).mtimeMs;
 
   {
-    const content = fs.readFileSync(inputFile, 'utf8');
-    let pos = 0;
-    for (const line of content.split('\n')) {
-      const byteStart = pos;
-      pos += Buffer.byteLength(line, 'utf8') + 1; // +1 for \n
-      if (!line.trim()) continue;
-      try {
-        const p = JSON.parse(line);
-        const biz = p.business || {};
-        const pid = biz.placeId || (p._meta && p._meta.placeId);
-        if (pid) placeIndex.push({ pid, name: biz.name || '?', expected: biz.reviewCount || 0, byteStart, byteEnd: byteStart + Buffer.byteLength(line, 'utf8') });
-      } catch (e) {}
-    }
-    // content goes out of scope here — GC can reclaim
+    const readline = require('readline');
+    const inputStream = fs.createReadStream(inputFile, { encoding: 'utf8' });
+    const rl = readline.createInterface({ input: inputStream, crlfDelay: Infinity });
+    let bytePos = 0;
+
+    await new Promise((resolve) => {
+      rl.on('line', (line) => {
+        const byteStart = bytePos;
+        const lineBytes = Buffer.byteLength(line, 'utf8');
+        bytePos += lineBytes + 1; // +1 for \n
+
+        if (!line.trim()) return;
+        try {
+          const p = JSON.parse(line);
+          const biz = p.business || {};
+          const pid = biz.placeId || (p._meta && p._meta.placeId);
+          if (pid) placeIndex.push({ pid, name: biz.name || '?', expected: biz.reviewCount || 0, byteStart, byteEnd: byteStart + lineBytes });
+        } catch (e) {}
+      });
+      rl.on('close', resolve);
+    });
   }
   log(`[REVIEWS] Indexed ${placeIndex.length} places from ${inputFile}`);
 
@@ -326,20 +331,29 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     return JSON.parse(buf.toString('utf8'));
   }
 
-  // Resume: check which places already have reviews
+  // Resume: check which places already have reviews (streaming to handle large files)
   const doneSet = new Set();
   if (fs.existsSync(outputFile)) {
-    const existing = fs.readFileSync(outputFile, 'utf8').trim().split('\n');
-    for (const line of existing) {
-      if (!line) continue;
-      try {
-        const p = JSON.parse(line);
-        const pid = p._meta?.placeId || p.business?.placeId;
-        if (pid && p.detailedReviews && p.detailedReviews.length > 0) {
-          doneSet.add(pid);
-        }
-      } catch (e) {}
-    }
+    const readline = require('readline');
+    const resumeStream = fs.createReadStream(outputFile, { encoding: 'utf8' });
+    const resumeRl = readline.createInterface({ input: resumeStream, crlfDelay: Infinity });
+
+    await new Promise((resolve) => {
+      resumeRl.on('line', (line) => {
+        if (!line.trim()) return;
+        try {
+          // Only parse enough to get placeId — avoid parsing huge detailedReviews arrays
+          // placeId appears early in the JSON, so partial parse via regex is faster
+          const pidMatch = line.match(/"placeId"\s*:\s*"([^"]+)"/);
+          const hasReviews = line.includes('"detailedReviews":[{');
+          if (pidMatch && hasReviews) {
+            doneSet.add(pidMatch[1]);
+          }
+        } catch (e) {}
+      });
+      resumeRl.on('close', resolve);
+    });
+
     if (doneSet.size > 0) {
       log(`[REVIEWS] Resuming: ${doneSet.size} places already done`);
     }
