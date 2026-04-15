@@ -112,6 +112,14 @@ stop_background() {
     kill "$pid" 2>/dev/null || true
   done
   sleep 2
+  # Force kill if still running
+  local remaining=$(pgrep -f "review-scraper" 2>/dev/null || true)
+  if [ -n "$remaining" ]; then
+    for pid in $remaining; do
+      echo "Force killing PID $pid..."
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  fi
   echo "Done. Progress saved — restart to resume."
 }
 

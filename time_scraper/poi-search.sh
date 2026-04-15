@@ -129,6 +129,13 @@ stop_background() {
     kill "$pid" 2>/dev/null || true
   done
   sleep 2
+  local remaining=$(pgrep -f "poi-searcher-api" 2>/dev/null || true)
+  if [ -n "$remaining" ]; then
+    for pid in $remaining; do
+      echo "Force killing PID $pid..."
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  fi
   echo "Done. Progress has been saved to the output file."
 }
 
