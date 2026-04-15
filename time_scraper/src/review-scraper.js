@@ -293,40 +293,37 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     logStream.write(line + '\n');
   };
 
-  // Read input: only extract placeId + line index (lightweight)
-  // Full place data is read per-line on demand to avoid OOM
-  let inputLines = fs.readFileSync(inputFile, 'utf8').trim().split('\n');
-  let inputMtime = fs.statSync(inputFile).mtimeMs; // track file changes
+  // Read input: index placeId + byte offset per line (lightweight)
+  // Full place data is read per-line on demand using byte offsets to avoid OOM
+  const placeIndex = []; // [{pid, name, expected, byteStart, byteEnd}]
+  let inputMtime = fs.statSync(inputFile).mtimeMs;
 
-  const placeIndex = []; // [{pid, name, expected, lineIdx}]
-  for (let i = 0; i < inputLines.length; i++) {
-    const line = inputLines[i];
-    if (!line.trim()) continue;
-    try {
-      const p = JSON.parse(line);
-      const biz = p.business || {};
-      const pid = biz.placeId || (p._meta && p._meta.placeId);
-      if (pid) placeIndex.push({ pid, name: biz.name || '?', expected: biz.reviewCount || 0, lineIdx: i });
-    } catch (e) {}
+  {
+    const content = fs.readFileSync(inputFile, 'utf8');
+    let pos = 0;
+    for (const line of content.split('\n')) {
+      const byteStart = pos;
+      pos += Buffer.byteLength(line, 'utf8') + 1; // +1 for \n
+      if (!line.trim()) continue;
+      try {
+        const p = JSON.parse(line);
+        const biz = p.business || {};
+        const pid = biz.placeId || (p._meta && p._meta.placeId);
+        if (pid) placeIndex.push({ pid, name: biz.name || '?', expected: biz.reviewCount || 0, byteStart, byteEnd: byteStart + Buffer.byteLength(line, 'utf8') });
+      } catch (e) {}
+    }
+    // content goes out of scope here — GC can reclaim
   }
-  inputLines = null; // free memory — will re-read per line on demand
   log(`[REVIEWS] Indexed ${placeIndex.length} places from ${inputFile}`);
 
-  // Helper: read a single place from file by line index (on demand)
-  function readPlace(lineIdx) {
-    // Check if file was modified
-    const currentMtime = fs.statSync(inputFile).mtimeMs;
-    if (currentMtime !== inputMtime) {
-      log(`[REVIEWS] Input file changed, reloading...`);
-      inputMtime = currentMtime;
-    }
-    // Read specific line (seek by counting newlines)
-    const content = fs.readFileSync(inputFile, 'utf8');
-    const lines = content.split('\n');
-    if (lineIdx < lines.length && lines[lineIdx].trim()) {
-      return JSON.parse(lines[lineIdx]);
-    }
-    return null;
+  // Helper: read a single place from file by byte offset (no full-file read)
+  function readPlace(byteStart, byteEnd) {
+    const fd = fs.openSync(inputFile, 'r');
+    const len = byteEnd - byteStart;
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, byteStart);
+    fs.closeSync(fd);
+    return JSON.parse(buf.toString('utf8'));
   }
 
   // Resume: check which places already have reviews
@@ -358,14 +355,15 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
   try {
     for (let i = 0; i < placeIndex.length; i++) {
-      const { pid, name, expected, lineIdx } = placeIndex[i];
+      const { pid, name, expected, byteStart, byteEnd } = placeIndex[i];
 
       if (doneSet.has(pid)) continue;
 
       log(`\n[${i + 1}/${placeIndex.length}] ${name} (expected: ${expected})`);
 
       // Read full place data on demand (not kept in memory)
-      const place = readPlace(lineIdx);
+      let place;
+      try { place = readPlace(byteStart, byteEnd); } catch (e) { log('  SKIP: read error ' + e.message); continue; }
       if (!place) { log('  SKIP: could not read place data'); continue; }
       const biz = place.business || {};
 
@@ -485,7 +483,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
   console.log(`\n=== Summary ===`);
-  console.log(`Processed: ${processed}/${places.length} | Reviews: ${totalReviews} | Errors: ${totalErrors} | Time: ${elapsed}s`);
+  console.log(`Processed: ${processed}/${placeIndex.length} | Reviews: ${totalReviews} | Errors: ${totalErrors} | Time: ${elapsed}s`);
   console.log(`Output: ${outputFile}`);
 
   return { processed, totalReviews, totalErrors, elapsed };
