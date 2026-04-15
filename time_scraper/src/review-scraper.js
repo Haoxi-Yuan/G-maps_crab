@@ -34,6 +34,241 @@ const CONFIG = {
   logMaxLines: 1000,
 };
 
+// ============================================
+// Supplement missing fields from preview/place
+// ============================================
+
+/**
+ * Extract place data from the preview/place response text.
+ * This response contains the same data structure as tbm=map's data[64].
+ */
+function extractSupplementFromPreview(previewText) {
+  const result = { _supplemented: [] };
+  if (!previewText) return result;
+
+  try {
+    const cleaned = previewText.replace(/^\)\]\}'\n/, '');
+    const data = JSON.parse(cleaned);
+
+    // preview/place response structure differs from tbm=map
+    // The place data is typically at data[6] or we search for it
+    let p = null;
+
+    // Try common paths
+    const candidates = [data[6], data[2], data[0]];
+    for (const c of candidates) {
+      if (c && Array.isArray(c) && c[11] && typeof c[11] === 'string') {
+        p = c; break;
+      }
+    }
+
+    // Fallback: search for the array containing name (field [11])
+    if (!p) {
+      const str = JSON.stringify(data);
+      // Find via ftid pattern
+      const ftidMatch = str.match(/"(0x[0-9a-f]+:0x[0-9a-f]+)"/);
+      if (ftidMatch) {
+        function findPlace(obj, depth) {
+          if (depth > 5 || !obj) return null;
+          if (Array.isArray(obj) && obj[10] === ftidMatch[1] && obj[11]) return obj;
+          if (Array.isArray(obj)) {
+            for (const item of obj) {
+              const r = findPlace(item, depth + 1);
+              if (r) return r;
+            }
+          }
+          return null;
+        }
+        p = findPlace(data, 0);
+      }
+    }
+
+    if (!p) return result;
+
+    // Extract fields using same paths as poi-searcher-api.js
+    const biz = {};
+
+    if (p[11]) biz.name = p[11];
+    if (p[2]) biz.address = p[2];
+    if (p[18]) biz.fullAddress = p[18];
+    if (p[9] && p[9][2] != null) biz.coordinates = { lat: p[9][2], lng: p[9][3] };
+    if (p[9] && p[9][2] != null) { biz.latitude = p[9][2]; biz.longitude = p[9][3]; }
+    if (p[4] && p[4][7] != null) biz.rating = p[4][7];
+    if (p[4] && p[4][8] != null) biz.reviewCount = p[4][8];
+    if (p[4] && p[4][2]) biz.priceRange = p[4][2];
+    if (p[13]) { biz.categories = p[13]; biz.mainCategory = p[13][0]; }
+    if (p[7] && p[7][1]) biz.website = p[7][1];
+    if (p[178] && p[178][0] && p[178][0][0]) biz.phone = p[178][0][0];
+    if (p[78]) biz.chijId = p[78];
+    if (p[89]) biz.googleId = p[89];
+    if (p[14]) biz.neighborhood = p[14];
+    if (p[30]) biz.timezone = p[30];
+
+    // Photos
+    try {
+      const extractPhotoUrls = (arr) => {
+        const urls = [];
+        const s = JSON.stringify(arr);
+        const matches = s.match(/https:\/\/lh[0-9]\.googleusercontent\.com\/[^"]+/g);
+        if (matches) for (const url of matches) {
+          if (!url.includes('/s44-') && !url.includes('-k-no-ns-nd')) urls.push(url);
+        }
+        return [...new Set(urls)];
+      };
+      const photos = [...new Set([
+        ...(p[37] ? extractPhotoUrls(p[37]) : []),
+        ...(p[105] ? extractPhotoUrls(p[105]) : []),
+      ])];
+      if (photos.length > 0) biz.photos = photos;
+    } catch (e) {}
+
+    // Owner info
+    if (p[57] && p[57][1]) biz.ownerInfo = { name: p[57][1], id: p[57][2] || null };
+
+    // Category IDs
+    if (p[76] && Array.isArray(p[76])) {
+      biz.categoryIds = p[76].map(c => Array.isArray(c) ? { id: c[0], label: c[1] } : null).filter(Boolean);
+    }
+
+    // Identity badges
+    try {
+      if (p[196] && Array.isArray(p[196][1])) {
+        const badges = p[196][1].map(b => Array.isArray(b) && b[1] ? b[1][0] : null).filter(Boolean);
+        if (badges.length > 0) biz.identityBadges = badges;
+      }
+    } catch (e) {}
+
+    // Description
+    try {
+      if (p[32] && Array.isArray(p[32])) {
+        biz.description = (p[32][1] && p[32][1][1]) || (p[32][0] && p[32][0][1]) || null;
+      }
+    } catch (e) {}
+
+    // Opening hours from [203]
+    try {
+      const rawHours = p[203];
+      if (rawHours && Array.isArray(rawHours[0])) {
+        const currentStatus = (rawHours[1] && rawHours[1][4] && rawHours[1][4][0]) || null;
+        const weeklyHours = [];
+        for (const day of rawHours[0]) {
+          if (!Array.isArray(day)) continue;
+          const dayName = day[0];
+          const hours = day[3] ? day[3].map(h => h[0]).join(', ') : 'Closed';
+          const openHour = day[3] && day[3][0] && day[3][0][1] && day[3][0][1][0] ? day[3][0][1][0][0] : null;
+          const closeHour = day[3] && day[3][0] && day[3][0][1] && day[3][0][1][1] ? day[3][0][1][1][0] : null;
+          weeklyHours.push({ day: dayName, hours, openHour, closeHour });
+        }
+        if (weeklyHours.length > 0) result.openingHours = { currentStatus, weeklyHours };
+      }
+    } catch (e) {}
+
+    // About from [100]
+    try {
+      const rawAbout = p[100];
+      if (rawAbout && Array.isArray(rawAbout)) {
+        const about = {};
+        for (const section of rawAbout) {
+          if (!Array.isArray(section)) continue;
+          for (const sub of section) {
+            if (!Array.isArray(sub)) continue;
+            if (typeof sub[0] === 'string' && typeof sub[1] === 'string' && Array.isArray(sub[2])) {
+              const items = sub[2].map(a => Array.isArray(a) && a[1] ? a[1] : null).filter(Boolean);
+              if (items.length > 0) about[sub[1]] = items;
+            } else if (typeof sub[0] === 'string' && sub[0].startsWith('/geo/') && sub[1]) {
+              if (!about['Highlights']) about['Highlights'] = [];
+              about['Highlights'].push(sub[1]);
+            }
+          }
+        }
+        if (Object.keys(about).length > 0) result.about = about;
+      }
+    } catch (e) {}
+
+    // Popular times (hourly data from text)
+    try {
+      const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const hourPattern = /\[(\d+),(\d+),"([^"]*)","([^"]*)","([^"]*)"/g;
+      const allHours = [];
+      let hm;
+      while ((hm = hourPattern.exec(previewText)) !== null) {
+        allHours.push({ hour: parseInt(hm[1]), popularity: parseInt(hm[2]), timeLabel: hm[5] });
+      }
+      if (allHours.length >= 18) {
+        const popularTimes = { weeklyData: [] };
+        let dayHours = [];
+        let prevHour = -1;
+        for (const h of allHours) {
+          if (h.hour <= prevHour && dayHours.length >= 10) {
+            popularTimes.weeklyData.push({ day: dayNames[popularTimes.weeklyData.length % 7], hourlyData: dayHours });
+            dayHours = [];
+          }
+          dayHours.push(h);
+          prevHour = h.hour;
+        }
+        if (dayHours.length >= 10) {
+          popularTimes.weeklyData.push({ day: dayNames[popularTimes.weeklyData.length % 7], hourlyData: dayHours });
+        }
+        if (popularTimes.weeklyData.length > 0) result.popularTimes = popularTimes;
+      }
+    } catch (e) {}
+
+    result.business = biz;
+  } catch (e) {}
+
+  return result;
+}
+
+/**
+ * Merge place data with supplement: only fill in null/missing fields.
+ */
+function supplementPlace(place, supplement, reviews) {
+  const merged = JSON.parse(JSON.stringify(place)); // deep clone
+  merged.detailedReviews = reviews;
+
+  const filled = [];
+
+  // Supplement business fields
+  if (supplement.business) {
+    if (!merged.business) merged.business = {};
+    for (const [key, val] of Object.entries(supplement.business)) {
+      if (val != null && (merged.business[key] == null || merged.business[key] === '')) {
+        merged.business[key] = val;
+        filled.push('business.' + key);
+      }
+    }
+  }
+
+  // Supplement top-level fields
+  for (const key of ['openingHours', 'popularTimes', 'about']) {
+    if (supplement[key] && !merged[key]) {
+      merged[key] = supplement[key];
+      filled.push(key);
+    }
+  }
+
+  // Supplement metadata.description
+  if (supplement.business && supplement.business.description && (!merged.metadata || !merged.metadata.description)) {
+    if (!merged.metadata) merged.metadata = {};
+    merged.metadata.description = supplement.business.description;
+    filled.push('metadata.description');
+  }
+
+  // Supplement _meta fields
+  if (supplement.business) {
+    if (!merged._meta) merged._meta = {};
+    for (const key of ['chijId', 'googleId', 'neighborhood', 'timezone']) {
+      if (supplement.business[key] && !merged._meta[key]) {
+        merged._meta[key] = supplement.business[key];
+        filled.push('_meta.' + key);
+      }
+    }
+  }
+
+  supplement._supplemented = filled;
+  return merged;
+}
+
 async function scrapeReviews(inputFile, outputFile, opts = {}) {
   const maxReviews = opts.maxReviews || CONFIG.maxReviews;
   const logFile = outputFile.replace(/\.ndjson$/, '.log');
@@ -172,50 +407,13 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         const coverage = expected > 0 ? Math.round(fetched / expected * 100) + '%' : '-';
         log(`  DONE: ${fetched}/${expected} (${coverage}) | ${reviewResult.withText || 0} text | ${reviewResult.elapsed || 0}s${reviewResult.error ? ' ERR:' + reviewResult.error : ''}`);
 
-        // Extract popularTimes from preview/place response (if available)
-        let popularTimes = null;
-        if (previewData) {
-          try {
-            const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-            // Parse hourly entries: [hour, pct, "busyLabel", "waitLabel", "timeLabel", ...]
-            const hourPattern = /\[(\d+),(\d+),"([^"]*)","([^"]*)","([^"]*)"/g;
-            const allHours = [];
-            let hm;
-            while ((hm = hourPattern.exec(previewData)) !== null) {
-              allHours.push({ hour: parseInt(hm[1]), popularity: parseInt(hm[2]), timeLabel: hm[5] });
-            }
-            // Split into days (each day has ~18-24 consecutive hourly entries starting from 6am)
-            if (allHours.length >= 18) {
-              popularTimes = { weeklyData: [] };
-              let dayHours = [];
-              let prevHour = -1;
-              for (const h of allHours) {
-                if (h.hour <= prevHour && dayHours.length >= 10) {
-                  // New day started
-                  popularTimes.weeklyData.push({
-                    day: dayNames[popularTimes.weeklyData.length % 7],
-                    hourlyData: dayHours,
-                  });
-                  dayHours = [];
-                }
-                dayHours.push(h);
-                prevHour = h.hour;
-              }
-              if (dayHours.length >= 10) {
-                popularTimes.weeklyData.push({
-                  day: dayNames[popularTimes.weeklyData.length % 7],
-                  hourlyData: dayHours,
-                });
-              }
-              if (popularTimes.weeklyData.length === 0) popularTimes = null;
-              else log(`  Popular times: ${popularTimes.weeklyData.length} days`);
-            }
-          } catch (e) {}
+        // Supplement missing fields from preview/place response
+        const supplement = extractSupplementFromPreview(previewData);
+        const merged = supplementPlace(place, supplement, reviewResult.reviews);
+        if (supplement._supplemented.length > 0) {
+          log(`  Supplemented: ${supplement._supplemented.join(', ')}`);
         }
 
-        // Write complete record — merge place data + reviews + popularTimes
-        const merged = { ...place, detailedReviews: reviewResult.reviews };
-        if (popularTimes) merged.popularTimes = popularTimes;
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
 
         totalReviews += fetched;
