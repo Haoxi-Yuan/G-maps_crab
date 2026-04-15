@@ -223,7 +223,11 @@ function extractSupplementFromPreview(previewText) {
  * Merge place data with supplement: only fill in null/missing fields.
  */
 function supplementPlace(place, supplement, reviews) {
-  const merged = JSON.parse(JSON.stringify(place)); // deep clone
+  // Shallow merge — place object is read fresh per iteration and discarded after write
+  const merged = {};
+  for (const key of Object.keys(place)) merged[key] = place[key];
+  if (place.business) merged.business = { ...place.business };
+  if (place._meta) merged._meta = { ...place._meta };
   merged.detailedReviews = reviews;
 
   const filled = [];
@@ -289,10 +293,41 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     logStream.write(line + '\n');
   };
 
-  // Read input places
-  const lines = fs.readFileSync(inputFile, 'utf8').trim().split('\n');
-  const places = lines.filter(l => l.trim()).map(l => JSON.parse(l));
-  log(`[REVIEWS] Loaded ${places.length} places from ${inputFile}`);
+  // Read input: only extract placeId + line index (lightweight)
+  // Full place data is read per-line on demand to avoid OOM
+  let inputLines = fs.readFileSync(inputFile, 'utf8').trim().split('\n');
+  let inputMtime = fs.statSync(inputFile).mtimeMs; // track file changes
+
+  const placeIndex = []; // [{pid, name, expected, lineIdx}]
+  for (let i = 0; i < inputLines.length; i++) {
+    const line = inputLines[i];
+    if (!line.trim()) continue;
+    try {
+      const p = JSON.parse(line);
+      const biz = p.business || {};
+      const pid = biz.placeId || (p._meta && p._meta.placeId);
+      if (pid) placeIndex.push({ pid, name: biz.name || '?', expected: biz.reviewCount || 0, lineIdx: i });
+    } catch (e) {}
+  }
+  inputLines = null; // free memory — will re-read per line on demand
+  log(`[REVIEWS] Indexed ${placeIndex.length} places from ${inputFile}`);
+
+  // Helper: read a single place from file by line index (on demand)
+  function readPlace(lineIdx) {
+    // Check if file was modified
+    const currentMtime = fs.statSync(inputFile).mtimeMs;
+    if (currentMtime !== inputMtime) {
+      log(`[REVIEWS] Input file changed, reloading...`);
+      inputMtime = currentMtime;
+    }
+    // Read specific line (seek by counting newlines)
+    const content = fs.readFileSync(inputFile, 'utf8');
+    const lines = content.split('\n');
+    if (lineIdx < lines.length && lines[lineIdx].trim()) {
+      return JSON.parse(lines[lineIdx]);
+    }
+    return null;
+  }
 
   // Resume: check which places already have reviews
   const doneSet = new Set();
@@ -322,17 +357,17 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   const startTime = Date.now();
 
   try {
-    for (let i = 0; i < places.length; i++) {
-      const place = places[i];
-      const biz = place.business || {};
-      const pid = biz.placeId || place._meta?.placeId;
+    for (let i = 0; i < placeIndex.length; i++) {
+      const { pid, name, expected, lineIdx } = placeIndex[i];
 
-      if (!pid) continue;
       if (doneSet.has(pid)) continue;
 
-      const name = biz.name || '?';
-      const expected = biz.reviewCount || 0;
-      log(`\n[${i + 1}/${places.length}] ${name} (expected: ${expected})`);
+      log(`\n[${i + 1}/${placeIndex.length}] ${name} (expected: ${expected})`);
+
+      // Read full place data on demand (not kept in memory)
+      const place = readPlace(lineIdx);
+      if (!place) { log('  SKIP: could not read place data'); continue; }
+      const biz = place.business || {};
 
       // Fresh context + page per place
       let context, page;
