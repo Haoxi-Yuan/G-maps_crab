@@ -381,6 +381,13 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
       if (!place) { log('  SKIP: could not read place data'); continue; }
       const biz = place.business || {};
 
+      // Restart browser periodically to prevent memory buildup (Chromium leaks ~2MB/context)
+      if (processed > 0 && processed % 200 === 0) {
+        log(`  [MEMORY] Restarting browser after ${processed} places...`);
+        try { await browser.close(); } catch (_) {}
+        browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
+      }
+
       // Fresh context + page per place
       let context, page;
       try {
