@@ -345,8 +345,9 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           // Only parse enough to get placeId — avoid parsing huge detailedReviews arrays
           // placeId appears early in the JSON, so partial parse via regex is faster
           const pidMatch = line.match(/"placeId"\s*:\s*"([^"]+)"/);
-          const hasReviews = line.includes('"detailedReviews":[{');
-          if (pidMatch && hasReviews) {
+          // Mark as done if the place appears in output at all (regardless of review count)
+          const hasOutput = line.includes('"detailedReviews"');
+          if (pidMatch && hasOutput) {
             doneSet.add(pidMatch[1]);
           }
         } catch (e) {}
