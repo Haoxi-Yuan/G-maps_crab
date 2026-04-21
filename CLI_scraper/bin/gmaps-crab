@@ -1,0 +1,110 @@
+#!/bin/bash
+# Top-level interactive launcher.
+# Routes to: boundary wizard (stage 1) / POI search (stage 2) / review scrape (stage 3).
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$SCRIPT_DIR"
+
+# Auto-bootstrap on first run
+if [ ! -f node_modules/.bootstrap-ok ]; then
+  echo "First run detected — running bootstrap..."
+  ./bootstrap.sh
+  echo ""
+fi
+
+print_logo() {
+  cat <<'EOF'
+
+    ___                        ___
+   / _ \                      / _ \
+  | | | |  __   _        _   | | | |
+  | | | | /  \ / \    / \ /\ | | | |
+   \ \_|_|   | \_/\  /\_/ |  |_|_/ /
+    \___  \  /\_ /\\//\ _/\  /  ___/
+        \  \/   V  VV  V   \/  /
+         )  \   |  ||  |   /  (
+        /  / \  |  ||  |  / \  \
+       /  /   \_|  ||  |_/   \  \
+      (__/      |__||__|      \__)
+
+       G - M A P S _ C R A B   CLI
+    ==================================
+
+EOF
+}
+
+show_status() {
+  echo ""
+  echo "=== Pipeline status ==="
+  echo ""
+  echo "Cities in data/ (stage 1 outputs):"
+  local found_data=0
+  for d in data/*/; do
+    [ -d "$d" ] || continue
+    local city=$(basename "$d")
+    local boundary=$(ls "$d"*_boundary.geojson 2>/dev/null | head -1)
+    local points=$(ls "$d"*_points.json 2>/dev/null | head -1)
+    local map=$(ls "$d"*_map.png 2>/dev/null | head -1)
+    local b_mark="-"; [ -n "$boundary" ] && b_mark="yes"
+    local p_mark="-"; [ -n "$points" ] && p_mark="yes"
+    local m_mark="-"; [ -n "$map" ]    && m_mark="yes"
+    printf "  %-25s boundary=%s points=%s map=%s\n" "$city" "$b_mark" "$p_mark" "$m_mark"
+    found_data=1
+  done
+  [ $found_data -eq 0 ] && echo "  (none)"
+
+  echo ""
+  echo "Cities in output/ (stages 2+3):"
+  local found_out=0
+  for d in output/*/; do
+    [ -d "$d" ] || continue
+    local city=$(basename "$d")
+    local places="-"; [ -f "$d/places.ndjson" ] && places=$(wc -l < "$d/places.ndjson" | tr -d ' ')
+    local reviews="-"; [ -f "$d/reviews.ndjson" ] && reviews=$(wc -l < "$d/reviews.ndjson" | tr -d ' ')
+    printf "  %-25s places=%s reviews=%s\n" "$city" "$places" "$reviews"
+    found_out=1
+  done
+  [ $found_out -eq 0 ] && echo "  (none)"
+
+  echo ""
+  echo "Running background processes:"
+  local pids_poi=$(pgrep -f "poi-searcher-api" 2>/dev/null || true)
+  local pids_rev=$(pgrep -f "review-scraper"   2>/dev/null || true)
+  if [ -z "$pids_poi" ] && [ -z "$pids_rev" ]; then
+    echo "  (none)"
+  else
+    for pid in $pids_poi $pids_rev; do
+      local elapsed=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
+      local cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 80)
+      printf "  PID %-8s elapsed=%-10s %s\n" "$pid" "$elapsed" "$cmd"
+    done
+  fi
+  echo ""
+}
+
+main_menu() {
+  while true; do
+    print_logo
+    echo "  [1] Stage 1 — Download city boundary + sampling points (+ map PNG)"
+    echo "  [2] Stage 2 — POI search"
+    echo "  [3] Stage 3 — Review scrape"
+    echo "  [4] Stage 4 — Build SQLite DB from ndjson sources"
+    echo ""
+    echo "  [s] Show status across all cities"
+    echo "  [q] Quit"
+    echo ""
+    read -p "Select> " CHOICE
+    case "$CHOICE" in
+      1) node src/cli/boundary-wizard.js ;;
+      2) ./poi-search.sh ;;
+      3) ./review-scrape.sh ;;
+      4) node src/cli/db-wizard.js ;;
+      s|S) show_status; read -p "Press Enter to continue..." _ ;;
+      q|Q) exit 0 ;;
+      *) echo "Invalid selection."; sleep 1 ;;
+    esac
+  done
+}
+
+main_menu

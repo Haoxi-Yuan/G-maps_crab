@@ -1,0 +1,10 @@
+# Data & output (generated)
+data/
+output/
+logs/
+
+# Python virtualenv for Stage 1 map rendering
+.venv/
+
+# Bootstrap marker (always regenerated)
+node_modules/.bootstrap-ok
