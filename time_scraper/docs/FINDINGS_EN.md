@@ -6,7 +6,7 @@
 
 When the `tbm=map` endpoint returns results for a given viewport, those results are ordered by distance from the viewport center. We can compute a distance ratio — the farthest result's distance divided by the viewport radius — and use it to estimate how much of the area's POI density the current result set actually represents.
 
-We tested this on three areas of San Francisco at zoom level 16 (viewport radius ~3,150m), then ran a 6×6 exhaustive grid at zoom 20 to establish ground truth:
+i tested this on three areas of San Francisco at zoom level 16 (viewport radius ~3,150m), then ran a 6×6 exhaustive grid at zoom 20 to establish ground truth:
 
 | Area | Distance ratio | Single-request results | Ground truth (grid) | Coverage |
 |------|---------------|----------------------|-------------------|----------|
