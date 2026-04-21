@@ -331,29 +331,73 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     return JSON.parse(buf.toString('utf8'));
   }
 
-  // Resume: check which places already have reviews (streaming to handle large files)
+  // Resume: scan the existing output for already-done pids.
+  //
+  // We deliberately do NOT use readline here — readline materialises each
+  // line as a full JS string before emitting `line`, and a single place with
+  // 50k+ reviews can be a 100+ MB line that blows V8's 4 GB JS heap during
+  // UTF-8 → UTF-16 decode. Instead we stream Buffer chunks, slice at `\n`
+  // byte boundaries, and for each line:
+  //   * decode only the first 8 KB to regex out placeId (it lives right at
+  //     the start of business.placeId, always inside the first 1-2 KB)
+  //   * scan for "detailedReviews" and "_placeholder":true as raw byte
+  //     needles across the whole line's Buffer list — no JS string ever
+  //     materialises for the bulk of the line.
+  // Memory is bounded by max(one line) as Buffer (off-heap), not by JS heap.
   const doneSet = new Set();
   if (fs.existsSync(outputFile)) {
-    const readline = require('readline');
-    const resumeStream = fs.createReadStream(outputFile, { encoding: 'utf8' });
-    const resumeRl = readline.createInterface({ input: resumeStream, crlfDelay: Infinity });
+    const NEWLINE = 0x0A;
+    const DETAILED_MARK = Buffer.from('"detailedReviews"');
+    const PLACEHOLDER_MARK = Buffer.from('"_placeholder":true');
+    const PID_RE = /"placeId"\s*:\s*"([^"]+)"/;
 
-    await new Promise((resolve) => {
-      resumeRl.on('line', (line) => {
-        if (!line.trim()) return;
-        try {
-          // Only parse enough to get placeId — avoid parsing huge detailedReviews arrays
-          // placeId appears early in the JSON, so partial parse via regex is faster
-          const pidMatch = line.match(/"placeId"\s*:\s*"([^"]+)"/);
-          // Mark as done if the place appears in output at all (regardless of review count)
-          const hasOutput = line.includes('"detailedReviews"');
-          if (pidMatch && hasOutput) {
-            doneSet.add(pidMatch[1]);
-          }
-        } catch (e) {}
-      });
-      resumeRl.on('close', resolve);
-    });
+    let lineBufs = [];
+
+    function finishLine() {
+      if (lineBufs.length === 0) return;
+      // Extract placeId from the first 8 KB.
+      let head = Buffer.alloc(0);
+      let taken = 0;
+      for (const b of lineBufs) {
+        if (taken >= 8192) break;
+        const slice = b.subarray(0, Math.min(8192 - taken, b.length));
+        head = taken === 0 ? slice : Buffer.concat([head, slice]);
+        taken += slice.length;
+      }
+      const m = head.toString('utf8').match(PID_RE);
+      if (!m) { lineBufs = []; return; }
+
+      // Byte-level scan for flag markers across all buffers, with a small
+      // prevTail carry so marker bytes spanning two chunks still match.
+      const markerMax = Math.max(DETAILED_MARK.length, PLACEHOLDER_MARK.length);
+      let hasDetailed = false;
+      let isPlaceholder = false;
+      let prevTail = Buffer.alloc(0);
+      for (const b of lineBufs) {
+        const scan = prevTail.length > 0 ? Buffer.concat([prevTail, b]) : b;
+        if (!hasDetailed && scan.indexOf(DETAILED_MARK) >= 0) hasDetailed = true;
+        if (!isPlaceholder && scan.indexOf(PLACEHOLDER_MARK) >= 0) isPlaceholder = true;
+        if (hasDetailed && isPlaceholder) break;
+        prevTail = scan.subarray(Math.max(0, scan.length - (markerMax - 1)));
+      }
+
+      if (hasDetailed && !isPlaceholder) doneSet.add(m[1]);
+      lineBufs = [];
+    }
+
+    const resumeStream = fs.createReadStream(outputFile);
+    for await (const chunk of resumeStream) {
+      let start = 0;
+      for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] === NEWLINE) {
+          if (i > start) lineBufs.push(chunk.subarray(start, i));
+          finishLine();
+          start = i + 1;
+        }
+      }
+      if (start < chunk.length) lineBufs.push(chunk.subarray(start));
+    }
+    finishLine();
 
     if (doneSet.size > 0) {
       log(`[REVIEWS] Resuming: ${doneSet.size} places already done`);
@@ -507,6 +551,11 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   console.log(`\n=== Summary ===`);
   console.log(`Processed: ${processed}/${placeIndex.length} | Reviews: ${totalReviews} | Errors: ${totalErrors} | Time: ${elapsed}s`);
   console.log(`Output: ${outputFile}`);
+
+  // Note: no auto-merge step. Build the final dataset (DB, combined ndjson)
+  // from this append-only reviews.ndjson + places.ndjson at consumption time.
+  // Historical `finalizeReviews` had a byte-range-rewrite bug that destroyed
+  // ~36% of sf_v4's 3.3 GB output in 2026-04; removed entirely.
 
   return { processed, totalReviews, totalErrors, elapsed };
 }
