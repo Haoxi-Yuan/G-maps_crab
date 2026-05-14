@@ -72,53 +72,209 @@ async function overpassPost(query) {
   throw lastErr || new Error('All Overpass mirrors failed');
 }
 
+function _candidateFromNominatim(r, fallbackCountry = null, fallbackCC = null) {
+  if (r.osm_type !== 'relation') return null;
+  const bb = r.boundingbox;
+  if (!bb || bb.length < 4) return null;
+  const [minLat, maxLat, minLon, maxLon] = bb.map(parseFloat);
+  const centerLat = (minLat + maxLat) / 2;
+  const centerLng = (minLon + maxLon) / 2;
+  const dLat = maxLat - minLat;
+  const dLng = (maxLon - minLon) * Math.cos(centerLat * Math.PI / 180);
+  const areaKm2 = dLat * dLng * 111 * 111;
+  const a = r.address || {};
+  const shortName = a.city || a.town || a.village || a.municipality || a.suburb
+    || r.name || (r.display_name || '').split(',')[0];
+  // Nominatim's `lat`/`lon` is the FEATURE's representative point (the
+  // city's urban centroid), not the bbox midpoint. For places like Tokyo
+  // whose bbox includes Pacific islands, this distinction is critical
+  // for downstream is_in queries.
+  const featureLat = parseFloat(r.lat);
+  const featureLng = parseFloat(r.lon);
+  const point = (Number.isFinite(featureLat) && Number.isFinite(featureLng))
+    ? [featureLat, featureLng] : null;
+  return {
+    osm_id: parseInt(r.osm_id, 10),
+    name: shortName,
+    name_en: null,
+    display_name: r.display_name || '',
+    type: r.type || '',
+    class: r.class || '',
+    place_rank: r.place_rank,
+    importance: typeof r.importance === 'number' ? r.importance : 0,
+    country: a.country || fallbackCountry,
+    country_code: (a.country_code || '').toUpperCase() || fallbackCC || null,
+    admin_level: r.extratags && r.extratags.admin_level
+      ? parseInt(r.extratags.admin_level, 10) : null,
+    area_km2: areaKm2,
+    bbox: [minLon, minLat, maxLon, maxLat],
+    center: [centerLat, centerLng],
+    point,
+    source: 'nominatim',
+  };
+}
+
+function _candidateFromOverpassRelation(el, fallbackCountry, fallbackCC) {
+  const tags = el.tags || {};
+  const b = el.bounds;
+  if (!b) return null;
+  const minLat = b.minlat, maxLat = b.maxlat, minLon = b.minlon, maxLon = b.maxlon;
+  const centerLat = (minLat + maxLat) / 2;
+  const centerLng = (minLon + maxLon) / 2;
+  const dLat = maxLat - minLat;
+  const dLng = (maxLon - minLon) * Math.cos(centerLat * Math.PI / 180);
+  const areaKm2 = dLat * dLng * 111 * 111;
+  return {
+    osm_id: el.id,
+    name: tags.name || tags['name:en'] || '?',
+    name_en: tags['name:en'] || null,
+    display_name: tags['name:en'] || tags.name || '',
+    type: tags.boundary || '',
+    class: tags.boundary === 'administrative' ? 'boundary' : '',
+    place_rank: null,
+    importance: 0,  // Overpass children sort below Nominatim primary
+    country: fallbackCountry,
+    country_code: fallbackCC,
+    admin_level: tags.admin_level ? parseInt(tags.admin_level, 10) : null,
+    area_km2: areaKm2,
+    bbox: [minLon, minLat, maxLon, maxLat],
+    center: [centerLat, centerLng],
+    source: 'overpass-child',
+  };
+}
+
 /**
- * Search Nominatim for administrative-boundary relations matching the query,
- * ranked by Nominatim's `importance`. Returns enough info to both disambiguate
- * (country, bbox, coords) and subsequently fetch geometry via Overpass (osm_id).
+ * Enumerate administrative subdivisions inside a given OSM relation via
+ * Overpass. Used as a generic drill-down when the user-typed name only
+ * matched a high-level admin entity (state/prefecture) and they want to
+ * pick a more specific child (e.g. Tokyo → 23 wards / individual ward;
+ * Greater London → boroughs; Île-de-France → Paris arrondissements).
  *
- * Nominatim handles disambiguation, case-folding, localization, and typos in
- * a single fast call — way more practical than regex-scanning Overpass for
- * common names like "London" or "Paris".
+ * Returns at most `limit` children whose admin_level is HIGHER (more
+ * specific) than the parent's. The parent itself is excluded.
+ */
+async function fetchChildAdmins(parentOsmId, parentAdminLevel, fallbackCountry, fallbackCC, limit = 30) {
+  const minChildLevel = Math.max((parentAdminLevel || 4) + 1, 5);
+  const query =
+    `[out:json][timeout:60];\n` +
+    `relation(${parentOsmId});\n` +
+    `map_to_area;\n` +
+    `relation(area)["boundary"="administrative"]["admin_level"~"^([${minChildLevel}-9]|10|11|12)$"];\n` +
+    `out tags bb;`;
+  let data;
+  try { data = await overpassPost(query); }
+  catch (_) { return []; }
+  const out = [];
+  for (const el of (data.elements || [])) {
+    if (el.type !== 'relation' || el.id === parentOsmId) continue;
+    const c = _candidateFromOverpassRelation(el, fallbackCountry, fallbackCC);
+    if (c) out.push(c);
+  }
+  // Sort children by admin_level asc (broader first) then area desc, take top N
+  out.sort((a, b) => {
+    const al = a.admin_level || 99, bl = b.admin_level || 99;
+    if (al !== bl) return al - bl;
+    return b.area_km2 - a.area_km2;
+  });
+  return out.slice(0, limit);
+}
+
+/**
+ * List ALL administrative-boundary relations whose polygon contains the given
+ * lat/lng. Catches "city-proper" / urban-core collective relations that are
+ * NOT structural children of the country/state hierarchy and therefore
+ * miss the `area`-based drill-down (e.g. Tokyo 23 Wards osm 19631009 sits
+ * parallel to the prefecture in OSM, not inside).
+ */
+async function fetchAdminsContainingPoint(lat, lng) {
+  const query = `[out:json][timeout:30];is_in(${lat},${lng});area._;rel(pivot);out tags bb;`;
+  let data;
+  try { data = await overpassPost(query); }
+  catch (_) { return []; }
+  const out = [];
+  for (const el of (data.elements || [])) {
+    if (el.type !== 'relation') continue;
+    const tags = el.tags || {};
+    if (tags.boundary !== 'administrative') continue; // skip historic / military / timezone
+    const lvl = tags.admin_level ? parseInt(tags.admin_level, 10) : null;
+    // Skip very-broad (country/region) and very-granular (sub-block) levels.
+    // Keep null admin_level — that's where collective "city proper" relations live.
+    if (lvl !== null && (lvl < 3 || lvl > 11)) continue;
+    const c = _candidateFromOverpassRelation(el, null, null);
+    if (c) {
+      c.source = 'overpass-pointin';
+      out.push(c);
+    }
+  }
+  return out;
+}
+
+/**
+ * Search Nominatim for boundary relations matching `cityName`. If the
+ * primary result is a broad admin entity (admin_level ≤ 4 or single result
+ * covering a huge area), automatically drill down via TWO Overpass queries:
+ *  1. children inside the parent's area (admin_level hierarchy walk)
+ *  2. relations whose polygon contains the primary's centroid point
+ *     (catches city-proper collectives outside the parent-child tree)
+ * Entirely generic — no region-specific keywords.
  */
 async function listCandidates(cityName) {
-  const path = `/search?q=${encodeURIComponent(cityName)}&format=json&addressdetails=1&limit=10`;
+  // extratags=1 so we get admin_level on the primary results
+  const path = `/search?q=${encodeURIComponent(cityName)}&format=json&addressdetails=1&extratags=1&limit=10`;
   const data = await _nominatimGet(path);
 
-  const list = [];
+  const sink = new Map();
+  let primaryTop = null;
   for (const r of (data || [])) {
-    // We need a relation to fetch full geometry from Overpass. Ways/nodes have
-    // no meaningful administrative polygon.
-    if (r.osm_type !== 'relation') continue;
-    const bb = r.boundingbox;
-    if (!bb || bb.length < 4) continue;
-    const [minLat, maxLat, minLon, maxLon] = bb.map(parseFloat);
-    const centerLat = (minLat + maxLat) / 2;
-    const centerLng = (minLon + maxLon) / 2;
-    const dLat = maxLat - minLat;
-    const dLng = (maxLon - minLon) * Math.cos(centerLat * Math.PI / 180);
-    const areaKm2 = dLat * dLng * 111 * 111;
-    const a = r.address || {};
-    // Prefer a short local name, fall back to the first piece of display_name.
-    const shortName = a.city || a.town || a.village || a.municipality || a.suburb
-      || r.name || (r.display_name || '').split(',')[0];
-    list.push({
-      osm_id: parseInt(r.osm_id, 10),
-      name: shortName,
-      display_name: r.display_name || '',
-      type: r.type || '',          // e.g. "administrative", "city"
-      class: r.class || '',         // e.g. "boundary", "place"
-      place_rank: r.place_rank,
-      importance: typeof r.importance === 'number' ? r.importance : 0,
-      country: a.country || null,
-      country_code: (a.country_code || '').toUpperCase() || null,
-      area_km2: areaKm2,
-      bbox: [minLon, minLat, maxLon, maxLat],
-      center: [centerLat, centerLng],
-    });
+    const c = _candidateFromNominatim(r);
+    if (!c) continue;
+    if (!sink.has(c.osm_id)) sink.set(c.osm_id, c);
+    if (!primaryTop) primaryTop = c;
   }
-  // Nominatim already returns best matches first (by importance). Keep that order.
-  return list;
+
+  // If the only / top match is a high-level admin (admin_level ≤ 4) OR
+  // covers a really big bbox area (> 5000 km²), enumerate its admin children
+  // so the user can pick a sub-division. Generic: works for any country
+  // because the OSM admin_level hierarchy is global.
+  const shouldDrill = primaryTop && (
+    sink.size <= 2 ||
+    (primaryTop.admin_level != null && primaryTop.admin_level <= 4) ||
+    primaryTop.area_km2 > 5000
+  );
+  if (shouldDrill) {
+    const children = await fetchChildAdmins(
+      primaryTop.osm_id, primaryTop.admin_level,
+      primaryTop.country, primaryTop.country_code,
+    );
+    for (const c of children) {
+      if (!sink.has(c.osm_id)) {
+        c.country = c.country || primaryTop.country;
+        c.country_code = c.country_code || primaryTop.country_code;
+        sink.set(c.osm_id, c);
+      }
+    }
+
+    // Also surface "parallel" admin relations that contain the primary's
+    // urban centroid but aren't reachable via the parent-child hierarchy.
+    // E.g. Tokyo 23 Wards (osm 19631009) is a separate boundary that
+    // overlaps Tokyo prefecture but sits outside its hierarchy.
+    if (primaryTop.point) {
+      const containing = await fetchAdminsContainingPoint(
+        primaryTop.point[0], primaryTop.point[1],
+      );
+      for (const c of containing) {
+        if (!sink.has(c.osm_id)) {
+          c.country = c.country || primaryTop.country;
+          c.country_code = c.country_code || primaryTop.country_code;
+          sink.set(c.osm_id, c);
+        }
+      }
+    }
+  }
+
+  // Sort: Nominatim importance desc; Overpass-children come after (importance=0)
+  // so the primary match stays at the top of the list.
+  return [...sink.values()].sort((a, b) => b.importance - a.importance);
 }
 
 /**
@@ -128,6 +284,94 @@ async function listCandidates(cityName) {
 async function fetchRelationGeometry(osmId) {
   const query = `[out:json][timeout:90];relation(${osmId});out geom;`;
   return overpassPost(query);
+}
+
+/**
+ * Score how well a candidate matches "the city administrative boundary".
+ *
+ * Globally most cities sit at admin_level 8 (US, FR, DE, NL, ...) or 7
+ * (Japan special wards / Korean cities), with city-states at 2-4 (Singapore,
+ * Hong Kong) and a few outliers at 6 (London boroughs, Paris commune).
+ * We bias for those levels, prefer city-sized areas, and reward exact
+ * name matches.
+ */
+function scoreCityCandidate(c, queryName) {
+  if (!c) return -Infinity;
+  let s = 0;
+
+  // Boundary relations only — place nodes / non-admin shapes are not what we want
+  if (c.class === 'boundary' && c.type === 'administrative') s += 100;
+  else if (c.class === 'place') s += 20;
+
+  // admin_level: city-typical levels get top score
+  const lvl = c.admin_level;
+  if (lvl == null) {
+    s += 0;
+  } else if (lvl === 8) s += 80;
+  else if (lvl === 7) s += 70;
+  else if (lvl === 6) s += 50;
+  else if (lvl === 9 || lvl === 10) s += 20;        // sub-city neighbourhoods
+  else if (lvl === 5) s += 30;                       // metropolitan groupings
+  else if (lvl === 4) {
+    // prefecture / state — good for city-state-likes (HK, Beijing 直辖市)
+    s += (c.area_km2 < 5000) ? 60 : -50;
+  } else if (lvl === 2 || lvl === 3) {
+    // country / region — only good for city-states (Singapore, Vatican...)
+    s += (c.area_km2 < 5000) ? 60 : -100;
+  }
+
+  // "City proper" / collective relations frequently lack admin_level but
+  // ARE the analytical unit users want (Tokyo 23 Wards osm 19631009 is
+  // the canonical case — boundary=administrative, no admin_level, sits
+  // parallel to the prefecture). Promote them when their area is in a
+  // reasonable city range.
+  if (c.class === 'boundary' && c.admin_level == null
+      && c.area_km2 >= 50 && c.area_km2 <= 5000) {
+    s += 80;
+  }
+
+  // Area sweet spot for cities: 10–3000 km² in bbox terms
+  const km2 = c.area_km2 || 0;
+  if (km2 >= 10 && km2 <= 3000) s += 30;
+  else if (km2 > 3000 && km2 <= 8000) s += 0;
+  else if (km2 > 8000) s -= 30;
+  else if (km2 < 1) s -= 30;                          // probably a tiny shape
+
+  // Name match against all known name variants — local name, English name,
+  // and the first piece of Nominatim's display_name. Exact match is a STRONG
+  // signal that this is the entity the user meant, even when geographic
+  // shape is unusual (e.g. Tokyo prefecture officially named "Tokyo" but
+  // includes Pacific islands).
+  if (queryName) {
+    const q = queryName.toLowerCase();
+    const variants = [c.name, c.name_en, (c.display_name || '').split(',')[0]]
+      .filter(Boolean).map((n) => String(n).toLowerCase());
+    const exact = variants.some((n) => n === q);
+    const sub = variants.some((n) => n.includes(q) || q.includes(n));
+    if (exact) s += 200;
+    else if (sub) s += 50;
+  }
+
+  // Nominatim importance bonus (caps ~+30)
+  if (typeof c.importance === 'number') s += Math.min(c.importance * 30, 30);
+
+  return s;
+}
+
+/**
+ * Returns { best, alternatives } where best is the highest-scoring "city"
+ * candidate and alternatives are the next ~5 candidates ordered by score.
+ */
+function pickBestCity(candidates, queryName) {
+  if (!candidates || candidates.length === 0) return { best: null, alternatives: [] };
+  const scored = candidates.map((c) => ({ c, s: scoreCityCandidate(c, queryName) }));
+  scored.sort((a, b) => b.s - a.s);
+  return {
+    best: scored[0].c,
+    bestScore: scored[0].s,
+    alternatives: scored.slice(1, 6).map((x) => x.c),
+    allRanked: scored.map((x) => x.c),
+  };
 }
 
 // --- Nominatim helper --------------------------------------------------------
@@ -164,4 +408,4 @@ async function _nominatimGet(path) {
   });
 }
 
-module.exports = { listCandidates, fetchRelationGeometry };
+module.exports = { listCandidates, fetchRelationGeometry, fetchChildAdmins, pickBestCity, scoreCityCandidate };

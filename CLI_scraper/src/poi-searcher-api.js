@@ -18,6 +18,7 @@
  */
 
 const fs = require('fs');
+const readline = require('readline');
 const { ringContains, pointInPolygon, pointInMultiPolygon } = require('./filter-by-boundary');
 
 // ============================================
@@ -173,7 +174,13 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
 
   const url = `https://www.google.com/search?tbm=map&authuser=0&hl=en&q=${encodeURIComponent(query)}&pb=${encodeURIComponent(pb)}`;
 
-  return await page.evaluate(async (fetchUrl) => {
+  // page.evaluate throws if the browser/context/page is closed (Chromium
+  // sometimes dies after long runs). Catch those throws here so the retry
+  // loop in fetchCellPaginated can decide what to do — and so a single
+  // browser death doesn't crash the whole scrape.
+  let result;
+  try {
+    result = await page.evaluate(async (fetchUrl) => {
     try {
       const resp = await fetch(fetchUrl, { credentials: 'include' });
       if (!resp.ok) return { error: resp.status, places: [] };
@@ -395,16 +402,25 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
     } catch (e) {
       return { error: e.message, places: [] };
     }
-  }, url);
+    }, url);
+  } catch (e) {
+    const msg = String(e && e.message || '');
+    if (/Target page, context or browser has been closed|Browser has been closed|Execution context was destroyed|page has been closed/i.test(msg)) {
+      return { error: 'browser_closed', places: [] };
+    }
+    return { error: 'evaluate_failed:' + msg.substring(0, 80), places: [] };
+  }
+  return result;
 }
 
 // ============================================
 // Paginated fetch (all pages for one viewport)
 // ============================================
 
-async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, globalIds, placeStore, stats, opts = {}) {
+async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, globalIds, stats, opts = {}) {
   const maxPages = opts.maxPaginationPages ?? CONFIG.maxPaginationPages;
   const delayMs = opts.requestDelayMs ?? CONFIG.requestDelayMs;
+  const placeWriter = opts._placeWriter || null;
   const newIds = [];
   let lastPageFull = false;
 
@@ -424,7 +440,8 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
     if (result.error) { stats.errors++; break; }
     if (result.places.length === 0) break;
 
-    // Collect new IDs and place data
+    // Collect new IDs and stream-write fresh records (first occurrence wins,
+    // matching prior placeStore semantics — duplicates within a run are dropped).
     let newThisPage = 0;
     for (const place of result.places) {
       if (!globalIds.has(place.ftid)) {
@@ -432,9 +449,7 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
         newIds.push(place.ftid);
         stats.totalIds++;
         newThisPage++;
-      }
-      if (!placeStore.has(place.ftid)) {
-        placeStore.set(place.ftid, place);
+        if (placeWriter) placeWriter.writeRecord(place, place.ftid);
       }
     }
 
@@ -455,7 +470,7 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
 // Quadtree search with pagination
 // ============================================
 
-async function searchCell(page, query, bbox, pbTemplate, globalIds, placeStore, stats, depth = 0, opts = {}) {
+async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth = 0, opts = {}) {
   const maxDepth = opts.maxDepth ?? CONFIG.maxDepth;
   const minCell = opts.minCellSizeKm ?? CONFIG.minCellSizeKm;
   const delayMs = opts.requestDelayMs ?? CONFIG.requestDelayMs;
@@ -474,7 +489,7 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, placeStore, 
   // Step 1: Paginate this cell fully
   const { newIds, lastPageFull } = await fetchCellPaginated(
     page, query, bbox.centerLat, bbox.centerLng, altitude, pbTemplate,
-    globalIds, placeStore, stats, opts
+    globalIds, stats, opts
   );
 
   const indent = '  '.repeat(Math.min(depth, 4));
@@ -491,7 +506,7 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, placeStore, 
     const quads = subdivideBBox(bbox);
     for (const quad of quads) {
       await page.waitForTimeout(delayMs);
-      const subIds = await searchCell(page, query, quad, pbTemplate, globalIds, placeStore, stats, depth + 1, opts);
+      const subIds = await searchCell(page, query, quad, pbTemplate, globalIds, stats, depth + 1, opts);
       newIds.push(...subIds);
     }
   } else {
@@ -508,7 +523,7 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, placeStore, 
 // Offset grid pass
 // ============================================
 
-async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, placeStore, stats, opts = {}) {
+async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, stats, opts = {}) {
   const onProgress = opts.onProgress || null;
   const delayMs = opts.requestDelayMs ?? CONFIG.requestDelayMs;
 
@@ -534,7 +549,7 @@ async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, placeStor
 
       const { newIds } = await fetchCellPaginated(
         page, query, lat, lng, altitude, pbTemplate,
-        globalIds, placeStore, stats, opts
+        globalIds, stats, opts
       );
       cellCount++;
       if (newIds.length > 0 && onProgress) {
@@ -554,8 +569,6 @@ async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, placeStor
 // ============================================
 
 async function batchSearchPOIs(browser, points, categories, options = {}, progressCallback = null) {
-  const allPlaceIds = new Set();
-  const placeStore = new Map();
   const results = [];
 
   const incrementalSaveFile = options.incrementalSaveFile;
@@ -563,42 +576,31 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
     ? incrementalSaveFile.replace(/[^/]+$/, 'places.ndjson')
     : null;
 
-  // Resume support
+  // Resume support: only the per-category progress comes from poi_search.json;
+  // place IDs are streamed from places.ndjson (single source of truth, avoids
+  // loading 360k records into memory at startup).
   const completedCategories = new Set();
-  let resumedIds = 0;
 
   if (incrementalSaveFile && fs.existsSync(incrementalSaveFile)) {
     try {
       const existing = JSON.parse(fs.readFileSync(incrementalSaveFile, 'utf8'));
-      if (existing.uniquePlaceIds) {
-        existing.uniquePlaceIds.forEach(id => allPlaceIds.add(id));
-        resumedIds = allPlaceIds.size;
-      }
       if (existing.results) {
         for (const r of existing.results) {
           results.push(r);
           completedCategories.add(r.category);
         }
       }
-      if (resumedIds > 0) console.log(`[QUADTREE] Resuming: ${resumedIds} place_ids, ${completedCategories.size} categories done`);
     } catch (e) {
       console.warn(`[QUADTREE] Resume load failed: ${e.message}`);
     }
   }
-  if (placesFile && fs.existsSync(placesFile)) {
-    try {
-      const lines = fs.readFileSync(placesFile, 'utf8').trim().split('\n');
-      for (const line of lines) {
-        if (!line) continue;
-        const p = JSON.parse(line);
-        if (p._meta && p._meta.placeId) {
-          placeStore.set(p._meta.placeId, p);
-          allPlaceIds.add(p._meta.placeId);
-        }
-      }
-      console.log(`[QUADTREE] Resumed ${placeStore.size} places from ${placesFile}`);
-    } catch (e) {}
+
+  const allPlaceIds = await streamLoadPlaceIds(placesFile);
+  if (allPlaceIds.size > 0 || completedCategories.size > 0) {
+    console.log(`[QUADTREE] Resuming: ${allPlaceIds.size} place_ids (from ndjson), ${completedCategories.size} categories done`);
   }
+
+  const placeWriter = createPlaceWriter(placesFile);
 
   const bbox = pointsToBBox(points);
   console.log(`[QUADTREE] Search area: ${bbox.sizeKm.toFixed(1)}km × ${bbox.sizeKm.toFixed(1)}km`);
@@ -660,17 +662,19 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
         }
         if (incrementalSaveFile && st.requests - lastSaveAt >= saveThrottle) {
           lastSaveAt = st.requests;
-          savePOIData(incrementalSaveFile, placesFile, allPlaceIds, placeStore, results, bbox, catIndex, totalCategories, category, st.requests);
+          savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories, category, st.requests);
         }
       };
 
+      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter };
+
       // Phase 1: Quadtree with pagination
-      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, 0, { ...options, onProgress, _boundaryCheck: boundaryCheck });
+      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, stats, 0, cellOpts);
 
       // Phase 2: Offset grid pass
       if (options.enableOffsetGrid !== false && CONFIG.enableOffsetGrid) {
         console.log(`  [offset] Running offset grid pass...`);
-        await runOffsetGrid(page, category, bbox, pbTemplate, allPlaceIds, placeStore, stats, { ...options, onProgress, _boundaryCheck: boundaryCheck });
+        await runOffsetGrid(page, category, bbox, pbTemplate, allPlaceIds, stats, cellOpts);
       }
 
       const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -681,17 +685,17 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       console.log(`[QUADTREE] Running total: ${allPlaceIds.size} unique POIs`);
 
       // Save after each category
-      savePOIData(incrementalSaveFile, placesFile, allPlaceIds, placeStore, results, bbox, catIndex, totalCategories);
+      savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories);
     }
 
   } finally {
-    await page.close();
-    await context.close();
+    try { await page.close(); } catch (_) {}
+    try { await context.close(); } catch (_) {}
+    try { await placeWriter.close(); } catch (_) {}
   }
 
   return {
     totalPlaceIds: allPlaceIds.size,
-    uniquePlaceIds: Array.from(allPlaceIds),
     placesFile: placesFile || null,
     results,
     searchArea: { ...bbox },
@@ -702,62 +706,99 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
 // Save helpers
 // ============================================
 
-function savePOIData(incrementalSaveFile, placesFile, allPlaceIds, placeStore, results, bbox, catIndex, totalCategories, currentCategory, requests) {
-  // Save poi_search.json
-  if (incrementalSaveFile) {
-    const saveData = {
-      timestamp: new Date().toISOString(),
-      progress: { categoriesDone: catIndex, totalCategories, currentCategory, requests },
-      totalPlaceIds: allPlaceIds.size,
-      uniquePlaceIds: Array.from(allPlaceIds),
-      results,
-      searchArea: { ...bbox },
-    };
-    try {
-      const tmp = incrementalSaveFile + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(saveData, null, 2), 'utf8');
-      fs.renameSync(tmp, incrementalSaveFile);
-    } catch (e) {}
-  }
+function formatPlaceRecord(p, ftid) {
+  return {
+    extractedAt: new Date().toISOString(),
+    sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
+    business: {
+      name: p.name, address: p.address, fullAddress: p.fullAddress,
+      coordinates: (p.lat != null && p.lng != null) ? { lat: p.lat, lng: p.lng } : null,
+      latitude: p.lat, longitude: p.lng, placeId: ftid,
+      categories: p.categories, categoryIds: p.categoryIds || null,
+      mainCategory: p.mainCategory,
+      rating: p.rating, reviewCount: p.reviewCount, priceRange: p.priceRange,
+      phone: p.phone, website: p.website, plusCode: p.plusCode || null,
+      photos: p.photos || null,
+      ownerInfo: p.ownerInfo || null,
+      serviceOptions: p.serviceOptions || null,
+      identityBadges: p.identityBadges || null,
+    },
+    openingHours: p.openingHours || null,
+    popularTimes: p.popularTimes || null,
+    about: p.about || null,
+    metadata: { description: p.description || null },
+    _meta: {
+      placeId: ftid, chijId: p.chijId, googleId: p.googleId || null,
+      sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
+      neighborhood: p.neighborhood, timezone: p.timezone,
+    },
+  };
+}
 
-  // Save places.ndjson
-  if (placesFile) {
-    try {
-      const lines = [];
-      for (const [ftid, p] of placeStore) {
-        const record = {
-          extractedAt: new Date().toISOString(),
-          sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
-          business: {
-            name: p.name, address: p.address, fullAddress: p.fullAddress,
-            coordinates: (p.lat != null && p.lng != null) ? { lat: p.lat, lng: p.lng } : null,
-            latitude: p.lat, longitude: p.lng, placeId: ftid,
-            categories: p.categories, categoryIds: p.categoryIds || null,
-            mainCategory: p.mainCategory,
-            rating: p.rating, reviewCount: p.reviewCount, priceRange: p.priceRange,
-            phone: p.phone, website: p.website, plusCode: p.plusCode || null,
-            photos: p.photos || null,
-            ownerInfo: p.ownerInfo || null,
-            serviceOptions: p.serviceOptions || null,
-            identityBadges: p.identityBadges || null,
-          },
-          openingHours: p.openingHours || null,
-          popularTimes: p.popularTimes || null,
-          about: p.about || null,
-          metadata: { description: p.description || null },
-          _meta: {
-            placeId: ftid, chijId: p.chijId, googleId: p.googleId || null,
-            sourceUrl: `https://www.google.com/maps/place/?ftid=${ftid}&hl=en`,
-            neighborhood: p.neighborhood, timezone: p.timezone,
-          },
-        };
-        lines.push(JSON.stringify(record));
-      }
-      const tmp = placesFile + '.tmp';
-      fs.writeFileSync(tmp, lines.join('\n') + '\n', 'utf8');
-      fs.renameSync(tmp, placesFile);
-    } catch (e) {}
+// Append-mode writer for places.ndjson. One long-lived fd, single writer per
+// process — no atomic-replace, no in-memory buffering of the full corpus.
+// Resume tolerates a torn final line via streamLoadPlaceIds.
+function createPlaceWriter(placesFile) {
+  if (!placesFile) {
+    return { writeRecord: () => {}, close: async () => {}, error: () => null };
   }
+  const stream = fs.createWriteStream(placesFile, { flags: 'a', encoding: 'utf8' });
+  let writeError = null;
+  stream.on('error', (err) => {
+    writeError = err;
+    console.error(`[QUADTREE] places.ndjson stream error: ${err.message}`);
+  });
+  return {
+    writeRecord(p, ftid) {
+      if (writeError) throw writeError;
+      stream.write(JSON.stringify(formatPlaceRecord(p, ftid)) + '\n');
+    },
+    async close() {
+      await new Promise((res) => stream.end(res));
+    },
+    error: () => writeError,
+  };
+}
+
+// Stream-read existing places.ndjson into a Set of placeIds. Tolerates a torn
+// final line (skips and warns) so resume after a crash mid-write doesn't fail.
+async function streamLoadPlaceIds(placesFile) {
+  const ids = new Set();
+  if (!placesFile || !fs.existsSync(placesFile)) return ids;
+  const rl = readline.createInterface({
+    input: fs.createReadStream(placesFile, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  let bad = 0;
+  for await (const line of rl) {
+    if (!line) continue;
+    try {
+      const p = JSON.parse(line);
+      if (p && p._meta && p._meta.placeId) ids.add(p._meta.placeId);
+    } catch (e) {
+      bad++;
+    }
+  }
+  if (bad > 0) {
+    console.warn(`[QUADTREE] Skipped ${bad} unparseable line(s) in ${placesFile} (likely torn from prior crash)`);
+  }
+  return ids;
+}
+
+function savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories, currentCategory, requests) {
+  if (!incrementalSaveFile) return;
+  const saveData = {
+    timestamp: new Date().toISOString(),
+    progress: { categoriesDone: catIndex, totalCategories, currentCategory, requests },
+    totalPlaceIds: allPlaceIds.size,
+    results,
+    searchArea: { ...bbox },
+  };
+  try {
+    const tmp = incrementalSaveFile + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(saveData, null, 2), 'utf8');
+    fs.renameSync(tmp, incrementalSaveFile);
+  } catch (e) {}
 }
 
 // ============================================

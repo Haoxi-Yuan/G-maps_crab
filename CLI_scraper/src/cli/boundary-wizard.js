@@ -110,7 +110,7 @@ async function main() {
       // --- Disambiguation: list OSM relations matching the name and let the
       // user pick one. Avoids merging unrelated same-named cities (e.g. the
       // Amsterdam in NL vs a namesake village in Missouri).
-      const { listCandidates, fetchRelationGeometry } = require('./boundary-resolver.js');
+      const { listCandidates, fetchRelationGeometry, pickBestCity } = require('./boundary-resolver.js');
       const BoundaryGenerator = require('../city-generator/boundary-generator.js');
 
       console.log('');
@@ -129,35 +129,134 @@ async function main() {
         process.exit(1);
       }
 
-      const maxShow = 15;
-      const shown = candidates.slice(0, maxShow);
+      const ADMIN_LEVEL_NAMES = {
+        2: 'Country', 3: 'Region', 4: 'State / Prefecture',
+        5: 'Sub-state / Subprefecture', 6: 'County / District',
+        7: 'Municipality', 8: 'City / Town',
+        9: 'District (within city)', 10: 'Ward / Suburb',
+        11: 'Sub-ward', 12: 'Local',
+      };
+      const fmtArea = (km2) => km2 >= 1000 ? km2.toFixed(0) + ' km²'
+        : km2 >= 1 ? km2.toFixed(1) + ' km²' : (km2 * 1e6).toFixed(0) + ' m²';
+
+      // Score candidates and present only the top 5 by default. The full
+      // ranked list (incl. drill-down children) is available via [a]ll.
+      const ranked = pickBestCity(candidates, cityName);
+      const TOP_N = 5;
+      const top = ranked.allRanked.slice(0, TOP_N);
+
+      const slugForOverview = sanitizeName(cityName);
+      const overviewDir = path.join(ROOT, 'data', slugForOverview);
+      fs.mkdirSync(overviewDir, { recursive: true });
+
+      // Helper: render an overview PNG for a given candidate set.
+      async function renderOverview(set, suffix) {
+        const candidatesJson = path.join(overviewDir, `_candidates${suffix}.json`);
+        const overviewPng = path.join(overviewDir, `_candidates${suffix}.png`);
+        fs.writeFileSync(candidatesJson, JSON.stringify(set.map((c, i) => ({
+          index: i + 1,
+          osm_id: c.osm_id,
+          name: c.name,
+          admin_level: c.admin_level == null ? null : c.admin_level,
+          country_code: c.country_code || null,
+          bbox: c.bbox,
+          center: c.center,
+          area_km2: c.area_km2,
+        }))));
+        const venvPy = path.join(ROOT, '.venv', 'bin', 'python3');
+        const pyBin = fs.existsSync(venvPy) ? venvPy : 'python3';
+        const pyScript = path.join(ROOT, 'src', 'cli', 'render-candidates-overview.py');
+        await new Promise((resolve, reject) => {
+          const child = spawn(pyBin, [
+            pyScript, '--in', candidatesJson, '--out', overviewPng,
+            '--title', `${cityName}: ${set.length} boundary candidate${set.length === 1 ? '' : 's'}`,
+          ], { stdio: 'pipe' });
+          let err = '';
+          child.stderr.on('data', (d) => { err += d.toString(); });
+          child.on('exit', (code) => code === 0 ? resolve() : reject(new Error('renderer exit ' + code + ': ' + err)));
+        });
+        return overviewPng;
+      }
+
+      function printList(set) {
+        // Group by admin_level for readability, but preserve global ranking.
+        const groups = new Map();
+        set.forEach((c, i) => {
+          const lvl = (c.admin_level == null ? 99 : c.admin_level);
+          if (!groups.has(lvl)) groups.set(lvl, []);
+          groups.get(lvl).push({ idx: i + 1, c });
+        });
+        for (const lvl of [...groups.keys()].sort((a, b) => a - b)) {
+          const label = lvl === 99 ? 'Unknown level' : `L${lvl}  ${ADMIN_LEVEL_NAMES[lvl] || ''}`;
+          console.log(`\n  ── ${label} ──`);
+          for (const { idx: i, c } of groups.get(lvl)) {
+            const [lat, lng] = c.center;
+            const cc = c.country_code ? `[${c.country_code}]` : '[??]';
+            const star = (i === 1) ? ' ★' : '  ';
+            console.log(
+              `   ${star}[${String(i).padStart(2)}] ${c.name.padEnd(28)} ${cc} ` +
+              `area≈${fmtArea(c.area_km2).padStart(10)}  ` +
+              `(${lat.toFixed(2)}°, ${lng.toFixed(2)}°)  osm=${c.osm_id}`
+            );
+          }
+        }
+      }
+
+      // First pass: top N
+      console.log('');
+      console.log(`Found ${candidates.length} candidate(s); showing top ${top.length} ranked by city-likelihood.`);
+      console.log(`(★ = best guess. Press Enter to take it, or pick a number, or [a] to see all ${candidates.length}.)`);
+      printList(top);
+      console.log('');
+      process.stdout.write('Rendering overview...');
+      try {
+        const png = await renderOverview(top, '_top');
+        console.log(' done');
+        console.log(`  ${path.relative(ROOT, png)}`);
+      } catch (e) {
+        console.log(' failed (' + e.message + ')');
+      }
 
       console.log('');
-      console.log(`Found ${candidates.length} candidate(s) — sorted by Nominatim importance:`);
-      shown.forEach((c, i) => {
-        const [lat, lng] = c.center;
-        const area = c.area_km2 >= 1
-          ? `${c.area_km2.toFixed(0)} km²`
-          : `${(c.area_km2 * 1e6).toFixed(0)} m²`;
-        const cc = c.country_code ? `[${c.country_code}]` : '[??]';
-        const cname = c.country ? ` ${c.country}` : '';
-        const kind = c.type ? ` type=${c.type}` : '';
-        console.log(
-          `  [${i + 1}] ${c.name} ${cc}${cname} ${kind}  area≈${area}  ` +
-          `center=(${lat.toFixed(3)}°, ${lng.toFixed(3)}°)  osm_id=${c.osm_id}`
-        );
-      });
-      if (candidates.length > maxShow) {
-        console.log(`  ... (${candidates.length - maxShow} more omitted)`);
-      }
+      let chosen = null;
+      while (chosen === null) {
+        const pickAns = await ask(rl, `Pick [1-${top.length}] / [a]ll / Enter for #1`, '1');
+        const ans = (pickAns || '').toString().trim().toLowerCase();
 
-      const pickAns = await ask(rl, `Select [1-${shown.length}]`, '1');
-      const idx = parseInt(pickAns, 10);
-      if (!Number.isFinite(idx) || idx < 1 || idx > shown.length) {
-        console.error('Invalid selection.');
-        process.exit(1);
+        if (ans === 'a' || ans === 'all') {
+          // Switch to the full ranked list.
+          const allSet = ranked.allRanked;
+          console.log('');
+          console.log(`All ${allSet.length} candidates (still ranked by city-likelihood):`);
+          printList(allSet);
+          console.log('');
+          process.stdout.write('Rendering full overview...');
+          try {
+            const png = await renderOverview(allSet, '_all');
+            console.log(' done');
+            console.log(`  ${path.relative(ROOT, png)}`);
+          } catch (e) {
+            console.log(' failed (' + e.message + ')');
+          }
+          console.log('');
+          const pickAll = await ask(rl, `Pick [1-${allSet.length}] / Enter for #1`, '1');
+          const i2 = parseInt(pickAll, 10);
+          if (Number.isFinite(i2) && i2 >= 1 && i2 <= allSet.length) {
+            chosen = allSet[i2 - 1];
+          } else {
+            console.error('Invalid selection.');
+            process.exit(1);
+          }
+          break;
+        }
+
+        const idx = parseInt(ans, 10);
+        if (Number.isFinite(idx) && idx >= 1 && idx <= top.length) {
+          chosen = top[idx - 1];
+          break;
+        }
+        console.log('Type a number 1-' + top.length + ', "a" for all, or just press Enter.');
       }
-      const chosen = shown[idx - 1];
       console.log(`Selected: ${chosen.name}  (osm_id=${chosen.osm_id}, admin_level=${chosen.admin_level})`);
 
       console.log('Fetching geometry...');

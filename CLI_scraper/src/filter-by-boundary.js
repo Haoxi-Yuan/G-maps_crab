@@ -73,50 +73,84 @@ function loadBoundary(boundaryFile) {
 // Main
 // ============================================
 
-function filterByBoundary(inputFile, boundaryFile) {
+async function filterByBoundary(inputFile, boundaryFile) {
+  const readline = require('readline');
   const contains = loadBoundary(boundaryFile);
 
-  const lines = fs.readFileSync(inputFile, 'utf8').trim().split('\n');
-  const kept = [];
-  const removed = [];
-  let noCoords = 0;
+  // Stream-read source, stream-write kept/removed to NEW files. Once both
+  // streams flush successfully, atomic-rename the kept-tmp over the original.
+  // This avoids:
+  //   * V8's ~512 MB string limit (readFileSync + split + join blows up at
+  //     that size — Singapore places.ndjson is 518 MB)
+  //   * partial-overwrite corruption if the process dies mid-write
+  const tmpKept = inputFile + '.filter-tmp';
+  const removedFile = inputFile.replace(/\.ndjson$/, '_removed.ndjson');
+  // Clean any stale tmp from a previous failed run.
+  try { fs.unlinkSync(tmpKept); } catch (_) {}
+  const keptStream = fs.createWriteStream(tmpKept);
+  const removedStream = fs.createWriteStream(removedFile);
 
-  for (const line of lines) {
+  let total = 0, keptN = 0, removedN = 0, noCoords = 0, parseErrors = 0;
+
+  async function writeLine(stream, line) {
+    if (!stream.write(line + '\n')) {
+      await new Promise((r) => stream.once('drain', r));
+    }
+  }
+
+  const rl = readline.createInterface({
+    input: fs.createReadStream(inputFile, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+
+  for await (const line of rl) {
     if (!line.trim()) continue;
-    const p = JSON.parse(line);
+    total++;
+    let p;
+    try { p = JSON.parse(line); }
+    catch (e) {
+      // Defensive: keep unparseable lines in the kept set so we don't drop
+      // possibly-valuable data on a JSON glitch.
+      parseErrors++;
+      await writeLine(keptStream, line);
+      keptN++;
+      continue;
+    }
     const biz = p.business || {};
     const coords = biz.coordinates;
 
     if (!coords || coords.lat == null || coords.lng == null) {
-      // No coordinates — keep (can't determine)
-      kept.push(line);
-      noCoords++;
-      continue;
-    }
-
-    if (contains(coords.lat, coords.lng)) {
-      kept.push(line);
+      await writeLine(keptStream, line);
+      keptN++; noCoords++;
+    } else if (contains(coords.lat, coords.lng)) {
+      await writeLine(keptStream, line);
+      keptN++;
     } else {
-      removed.push(line);
+      await writeLine(removedStream, line);
+      removedN++;
     }
   }
 
-  // Write filtered file (replace original)
-  fs.writeFileSync(inputFile, kept.join('\n') + '\n', 'utf8');
+  await new Promise((r) => keptStream.end(r));
+  await new Promise((r) => removedStream.end(r));
 
-  // Write removed places for review
-  const removedFile = inputFile.replace(/\.ndjson$/, '_removed.ndjson');
-  if (removed.length > 0) {
-    fs.writeFileSync(removedFile, removed.join('\n') + '\n', 'utf8');
+  // Atomic-rename tmp over the original. Same filesystem, so this is one
+  // POSIX rename(2) — either the new file is in place or the old one is.
+  fs.renameSync(tmpKept, inputFile);
+
+  // Drop the removed file if nothing was filtered out (cleaner output dir).
+  if (removedN === 0) {
+    try { fs.unlinkSync(removedFile); } catch (_) {}
   }
 
   console.log(`Filtered: ${inputFile}`);
-  console.log(`  Total:     ${lines.length}`);
-  console.log(`  Kept:      ${kept.length} (${(kept.length / lines.length * 100).toFixed(1)}%)`);
-  console.log(`  Removed:   ${removed.length} → ${removedFile}`);
-  console.log(`  No coords: ${noCoords} (kept)`);
+  console.log(`  Total:        ${total}`);
+  console.log(`  Kept:         ${keptN} (${total ? (keptN / total * 100).toFixed(1) : 0}%)`);
+  console.log(`  Removed:      ${removedN}${removedN ? ` → ${removedFile}` : ''}`);
+  console.log(`  No coords:    ${noCoords} (kept)`);
+  if (parseErrors) console.log(`  Parse errors: ${parseErrors} (kept as-is)`);
 
-  return { total: lines.length, kept: kept.length, removed: removed.length, noCoords };
+  return { total, kept: keptN, removed: removedN, noCoords, parseErrors };
 }
 
 // ============================================
@@ -151,7 +185,10 @@ Removed places are saved to places_removed.ndjson for review.
     process.exit(1);
   }
 
-  filterByBoundary(inputFile, boundaryFile);
+  filterByBoundary(inputFile, boundaryFile).catch((err) => {
+    console.error('Fatal:', err && err.stack || err);
+    process.exit(1);
+  });
 }
 
 module.exports = { filterByBoundary, pointInPolygon, pointInMultiPolygon, ringContains };

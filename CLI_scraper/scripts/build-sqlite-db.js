@@ -26,8 +26,28 @@
 
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 const Database = require('better-sqlite3');
+
+// Buffer-based line splitter. We deliberately avoid readline.createInterface
+// because it silently splits very long lines (multi-MB JSON records) into
+// phantom pieces that then fail to parse. Splitting on raw 0x0A is safe for
+// UTF-8: continuation bytes are 0x80-0xBF, never 0x0A.
+async function* bufferLines(filePath) {
+  const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 * 1024 });
+  let pending = null;
+  for await (const chunk of stream) {
+    let combined = pending ? Buffer.concat([pending, chunk]) : chunk;
+    let start = 0;
+    while (true) {
+      const lf = combined.indexOf(0x0A, start);
+      if (lf < 0) break;
+      yield combined.slice(start, lf).toString('utf8');
+      start = lf + 1;
+    }
+    pending = start < combined.length ? combined.slice(start) : null;
+  }
+  if (pending && pending.length) yield pending.toString('utf8');
+}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS businesses (
@@ -114,6 +134,7 @@ function parseArgs(argv) {
       case '--input':  args.inputs.push(argv[++i]); break;
       case '--output': args.output = argv[++i]; break;
       case '--fresh':  args.fresh  = true; break;
+      case '--no-indexes': args.noIndexes = true; break;
       case '--help':
         console.log('Usage: node scripts/build-sqlite-db.js --input <file.ndjson> [--input <...>] --output <out.db> [--fresh]');
         console.log('');
@@ -127,12 +148,20 @@ function parseArgs(argv) {
 }
 
 function openDb(outputFile, fresh) {
-  if (fresh && fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
+  if (fresh) {
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      const f = outputFile + suffix;
+      if (fs.existsSync(f)) fs.unlinkSync(f);
+    }
+  }
   fs.mkdirSync(path.dirname(outputFile), { recursive: true });
   const db = new Database(outputFile);
   db.pragma('journal_mode = WAL');
-  db.pragma('synchronous = NORMAL');
+  // synchronous=OFF is safe here: this is a derived index, not source data,
+  // and a power-loss corruption is recoverable by rebuilding from ndjson.
+  db.pragma('synchronous = OFF');
   db.pragma('temp_store = MEMORY');
+  db.pragma('cache_size = -262144');
   db.exec(SCHEMA);
   return db;
 }
@@ -244,8 +273,8 @@ async function main() {
     VALUES (@review_id, @place_id, @image_index, @url, @local_path, @source)
   `);
 
-  // Transaction handling each place: one BEGIN per place gives us ACID per row.
-  const ingestPlace = db.transaction((place) => {
+  // Per-place ingestion (no transaction here — the batch wrapper provides one).
+  const ingestPlace = (place) => {
     const bizRow = buildBusinessRow(place, mergedAt);
     if (!bizRow) return { reviews: 0, images: 0, skipped: true };
     insertBiz.run(bizRow);
@@ -271,6 +300,21 @@ async function main() {
       }
     }
     return { reviews: revCount, images: imgCount, skipped: false };
+  };
+
+  // Batch many places into one BEGIN/COMMIT — the per-place fsync overhead
+  // dominated wall time at ~1.7 places/sec; batching lifts it ~50x.
+  const BATCH_SIZE = 200;
+  const ingestBatch = db.transaction((places) => {
+    const acc = { placesOk: 0, placeholders: 0, reviews: 0, images: 0 };
+    for (const place of places) {
+      if (place._placeholder) acc.placeholders++;
+      const r = ingestPlace(place);
+      if (!r.skipped) acc.placesOk++;
+      acc.reviews += r.reviews;
+      acc.images += r.images;
+    }
+    return acc;
   });
 
   let placesIn = 0, placesOut = 0, placeholders = 0, reviewsOut = 0, imagesOut = 0;
@@ -279,11 +323,17 @@ async function main() {
   for (const inputFile of args.inputs) {
     console.log(`\n=== Ingesting ${inputFile} ===`);
     let fileLines = 0;
-    const rl = readline.createInterface({
-      input: fs.createReadStream(inputFile, { encoding: 'utf8' }),
-      crlfDelay: Infinity,
-    });
-    for await (const line of rl) {
+    let batch = [];
+    const flush = () => {
+      if (!batch.length) return;
+      const r = ingestBatch(batch);
+      placesOut    += r.placesOk;
+      placeholders += r.placeholders;
+      reviewsOut   += r.reviews;
+      imagesOut    += r.images;
+      batch = [];
+    };
+    for await (const line of bufferLines(inputFile)) {
       if (!line.trim()) continue;
       placesIn++; fileLines++;
       let place;
@@ -292,27 +342,30 @@ async function main() {
         console.warn(`  parse error at ${inputFile} line ${fileLines}: ${e.message}; skipping`);
         continue;
       }
-      if (place._placeholder) placeholders++;
-      const r = ingestPlace(place);
-      if (!r.skipped) placesOut++;
-      reviewsOut += r.reviews;
-      imagesOut += r.images;
-
-      if (placesIn % 2000 === 0) {
-        const secs = Math.round((Date.now() - startedAt) / 1000);
-        console.log(
-          `  processed ${placesIn} places (${placesOut} with id, ${placeholders} placeholders), ` +
-          `${reviewsOut} reviews, ${imagesOut} images — ${secs}s`
-        );
+      batch.push(place);
+      if (batch.length >= BATCH_SIZE) {
+        flush();
+        if (placesIn % 2000 === 0) {
+          const secs = Math.round((Date.now() - startedAt) / 1000);
+          console.log(
+            `  processed ${placesIn} places (${placesOut} with id, ${placeholders} placeholders), ` +
+            `${reviewsOut} reviews, ${imagesOut} images — ${secs}s`
+          );
+        }
       }
     }
+    flush();
     console.log(`  done ${inputFile}: ${fileLines} lines from this file`);
   }
 
-  console.log('Creating indexes...');
-  for (const sql of INDEXES) db.exec(sql);
-  console.log('Running ANALYZE...');
-  db.exec('ANALYZE');
+  if (args.noIndexes) {
+    console.log('Skipping index creation (--no-indexes)');
+  } else {
+    console.log('Creating indexes...');
+    for (const sql of INDEXES) db.exec(sql);
+    console.log('Running ANALYZE...');
+    db.exec('ANALYZE');
+  }
 
   const bizN = db.prepare('SELECT COUNT(*) c FROM businesses').get().c;
   const revN = db.prepare('SELECT COUNT(*) c FROM reviews').get().c;

@@ -374,8 +374,12 @@ step_launch() {
     eval "$CMD" 2>&1 | tee "$LOG_FILE"
   else
     echo ""
-    nohup bash -c "cd '$SCRIPT_DIR' && $CMD" > "$LOG_FILE" 2>&1 &
-    local PID=$!
+    local SESS="gmaps-rev-$(echo "${CITY_NAME:-default}" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_')"
+    tmux kill-session -t "$SESS" 2>/dev/null || true
+    tmux new-session -d -s "$SESS" "cd '$SCRIPT_DIR' && $CMD 2>&1 | tee -a '$LOG_FILE'; echo; echo '=== scraper exited; press Enter to close this tmux pane ==='; read"
+    sleep 1
+    local PID=$(pgrep -f "review-scraper.js.*$(basename "$INPUT_FILE")" 2>/dev/null | head -1)
+    echo "tmux session: $SESS  (re-attach: tmux attach -t $SESS  ·  detach: Ctrl-B D)"
     echo "Started in background (PID: $PID)"
     echo ""
     echo "Monitor:"
@@ -460,8 +464,12 @@ print(f'Filtered: {count} places with >= $MIN_REVIEW_COUNT reviews')
     echo "  Log:     $LOG_FILE"
     echo ""
 
-    nohup bash -c "cd '$SCRIPT_DIR' && $CMD" > "$LOG_FILE" 2>&1 &
-    local PID=$!
+    local SESS="gmaps-rev-$(echo "${CITY_NAME:-default}" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_')"
+    tmux kill-session -t "$SESS" 2>/dev/null || true
+    tmux new-session -d -s "$SESS" "cd '$SCRIPT_DIR' && $CMD 2>&1 | tee -a '$LOG_FILE'; echo; echo '=== scraper exited; press Enter to close this tmux pane ==='; read"
+    sleep 1
+    local PID=$(pgrep -f "review-scraper.js.*$(basename "$INPUT_FILE")" 2>/dev/null | head -1)
+    echo "tmux session: $SESS  (re-attach: tmux attach -t $SESS  ·  detach: Ctrl-B D)"
 
     echo "  PID:     $PID"
     echo ""

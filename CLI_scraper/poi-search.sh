@@ -288,30 +288,51 @@ const api = require('./src/poi-searcher-api');
   ${cat_filter_code}
   console.log('Points:', points.length, '| Categories:', categories.length);
 
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const result = await api.batchSearchPOIs(browser, points, categories, {
-      maxDepth: ${MAX_DEPTH},
-      subdivideThreshold: ${THRESHOLD},
-      requestDelayMs: ${DELAY},
-      minCellSizeKm: ${MIN_CELL},
-      saveInterval: ${SAVE_INTERVAL},
-      incrementalSaveFile: '${OUTPUT_FILE}',
-      boundaryFile: '${BOUNDARY_FILE}',
-    });
-    console.log('');
-    console.log('=== COMPLETED ===');
-    console.log('Total unique POIs:', result.totalPlaceIds);
-    let totalReq = 0;
-    for (const r of result.results) {
-      console.log('  ' + r.category + ': +' + r.newPlaceIds + ' (' + r.requests + ' req, ' + r.elapsed + 's)');
-      totalReq += r.requests;
+  // Browser-relaunch retry loop. Chromium occasionally dies during long
+  // scrapes (memory leak, OOM, or random renderer crash). When that happens,
+  // batchSearchPOIs throws 'Target page, context or browser has been closed'.
+  // We catch it, relaunch a fresh browser, and resume — the resume logic
+  // inside batchSearchPOIs will reload incrementalSaveFile + places.ndjson.
+  let browser = await chromium.launch({ headless: true });
+  let result = null;
+  const MAX_RESTARTS = 20;
+  for (let attempt = 1; attempt <= MAX_RESTARTS; attempt++) {
+    try {
+      result = await api.batchSearchPOIs(browser, points, categories, {
+        maxDepth: ${MAX_DEPTH},
+        subdivideThreshold: ${THRESHOLD},
+        requestDelayMs: ${DELAY},
+        minCellSizeKm: ${MIN_CELL},
+        saveInterval: ${SAVE_INTERVAL},
+        incrementalSaveFile: '${OUTPUT_FILE}',
+        boundaryFile: '${BOUNDARY_FILE}',
+      });
+      break;
+    } catch (e) {
+      const msg = String(e && e.message || '');
+      const isClosed = /Target page, context or browser has been closed|Browser has been closed|page has been closed|Execution context was destroyed/i.test(msg);
+      try { await browser.close(); } catch (_) {}
+      if (!isClosed || attempt >= MAX_RESTARTS) {
+        console.error('[QUADTREE] fatal: ' + msg);
+        throw e;
+      }
+      console.warn('[QUADTREE] browser died, restarting (attempt ' + attempt + '/' + MAX_RESTARTS + '): ' + msg.substring(0, 120));
+      await new Promise(r => setTimeout(r, 5000));
+      browser = await chromium.launch({ headless: true });
     }
-    console.log('Total requests:', totalReq);
-    console.log('Output saved to: ${OUTPUT_FILE}');
-  } finally {
-    await browser.close();
   }
+
+  console.log('');
+  console.log('=== COMPLETED ===');
+  console.log('Total unique POIs:', result.totalPlaceIds);
+  let totalReq = 0;
+  for (const r of result.results) {
+    console.log('  ' + r.category + ': +' + r.newPlaceIds + ' (' + r.requests + ' req, ' + r.elapsed + 's)');
+    totalReq += r.requests;
+  }
+  console.log('Total requests:', totalReq);
+  console.log('Output saved to: ${OUTPUT_FILE}');
+  try { await browser.close(); } catch (_) {}
 })();
 \""
 }
@@ -369,10 +390,16 @@ run_direct() {
 
     mkdir -p "$(dirname "$OUTPUT_FILE")"
     if [ -n "$FILTER_CMD" ]; then
-      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD && echo '' && echo 'Filtering by boundary...' && $FILTER_CMD" > "$LOG_FILE" 2>&1 &
+      local SESS="gmaps-poi-$(echo "${CITY_NAME:-default}" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_')"
+      tmux kill-session -t "$SESS" 2>/dev/null || true
+      tmux new-session -d -s "$SESS" "cd '$SCRIPT_DIR' && ($NODE_CMD && echo '' && echo 'Filtering by boundary...' && $FILTER_CMD) 2>&1 | tee -a '$LOG_FILE'; echo; echo '=== poi-search exited; press Enter to close ==='; read"
     else
-      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+      local SESS="gmaps-poi-$(echo "${CITY_NAME:-default}" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_')"
+      tmux kill-session -t "$SESS" 2>/dev/null || true
+      tmux new-session -d -s "$SESS" "cd '$SCRIPT_DIR' && $NODE_CMD 2>&1 | tee -a '$LOG_FILE'; echo; echo '=== poi-search exited; press Enter to close ==='; read"
     fi
+    sleep 1
+    echo "tmux session: $SESS  (re-attach: tmux attach -t $SESS  ·  detach: Ctrl-B D)"
     local PID=$!
 
     echo "  PID:     $PID"
@@ -585,10 +612,16 @@ step_launch() {
     echo ""
     # Background: chain search + filter
     if [ -n "$FILTER_CMD" ]; then
-      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD && echo '' && echo 'Filtering by boundary...' && $FILTER_CMD" > "$LOG_FILE" 2>&1 &
+      local SESS="gmaps-poi-$(echo "${CITY_NAME:-default}" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_')"
+      tmux kill-session -t "$SESS" 2>/dev/null || true
+      tmux new-session -d -s "$SESS" "cd '$SCRIPT_DIR' && ($NODE_CMD && echo '' && echo 'Filtering by boundary...' && $FILTER_CMD) 2>&1 | tee -a '$LOG_FILE'; echo; echo '=== poi-search exited; press Enter to close ==='; read"
     else
-      nohup bash -c "cd '$SCRIPT_DIR' && $NODE_CMD" > "$LOG_FILE" 2>&1 &
+      local SESS="gmaps-poi-$(echo "${CITY_NAME:-default}" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_')"
+      tmux kill-session -t "$SESS" 2>/dev/null || true
+      tmux new-session -d -s "$SESS" "cd '$SCRIPT_DIR' && $NODE_CMD 2>&1 | tee -a '$LOG_FILE'; echo; echo '=== poi-search exited; press Enter to close ==='; read"
     fi
+    sleep 1
+    echo "tmux session: $SESS  (re-attach: tmux attach -t $SESS  ·  detach: Ctrl-B D)"
     local PID=$!
     echo "Started in background (PID: $PID)"
     echo ""
