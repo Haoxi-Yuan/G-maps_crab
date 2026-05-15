@@ -3,6 +3,11 @@ data/
 output/
 logs/
 
+# Discovery / probe artifacts — raw batchexecute / preview/place dumps
+# from reverse-engineering Google Maps endpoints. Useful while iterating,
+# noisy in git.
+discovery/
+
 # Python virtualenv for Stage 1 map rendering
 .venv/
 

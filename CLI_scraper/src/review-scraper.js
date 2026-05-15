@@ -25,6 +25,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 const stealth = require('./stealth');
 const { fetchAllReviews } = require('./api-review-fetcher');
+const { makeSessionCapturer, fetchAllPhotoCategories } = require('./photo-category-fetcher');
 
 const CONFIG = {
   maxReviews: 50000,
@@ -452,14 +453,23 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
       try {
         const isFtid = pid.startsWith('0x');
 
-        // Capture preview/place response for popularTimes
+        // Capture preview/place — keep the LARGEST response (Maps fires
+        // both a lite version during search redirect and a full version
+        // on the place page; only the full one has photoCategories).
         let previewData = null;
         const previewHandler = async (resp) => {
           if (resp.url().includes('/maps/preview/place')) {
-            try { const t = await resp.text(); previewData = t; } catch(e) {}
+            try {
+              const t = await resp.text();
+              if (!previewData || t.length > previewData.length) previewData = t;
+            } catch(e) {}
           }
         };
         page.on('response', previewHandler);
+
+        // Capture a session token from the first auto-fired batchexecute.
+        // Needed to replicate ListEntityPhotos POSTs after reviews finish.
+        const photoSession = makeSessionCapturer(page);
 
         // Two-step load
         log('  Loading page...');
@@ -476,6 +486,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         await page.waitForTimeout(2000);
 
         page.off('response', previewHandler);
+        photoSession.detach();
 
         // Fetch reviews with incremental flush to prevent data loss
         log('  Fetching reviews...');
@@ -513,6 +524,30 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           log(`  Supplemented: ${supplement._supplemented.join(', ')}`);
         }
 
+        // Enumerate Google's adaptive photo categories (Menu / Food & drink /
+        // dish-specific tags / Latest / Videos / ...). Direct batchexecute
+        // POST against /MapsPhotoService.ListEntityPhotos — no UI nav.
+        // Takes ~2-30s/place depending on how many categories Google created.
+        if (photoSession.captured.sessionToken && previewData) {
+          try {
+            const photoStart = Date.now();
+            const photoResult = await fetchAllPhotoCategories(
+              page, previewData, photoSession.captured,
+              { perCategoryOpts: { pageSize: 20, maxPhotos: 5000, maxPages: 200 } },
+            );
+            const totalPhotos = (photoResult.categories || [])
+              .reduce((n, c) => n + (c.photoCount || 0), 0);
+            merged.photoCategories = photoResult.categories;
+            log(`  Photo categories: ${photoResult.categories.length} tags, ${totalPhotos} photos, ${Math.round((Date.now() - photoStart) / 1000)}s`);
+          } catch (e) {
+            log(`  Photo category fetch failed: ${e.message}`);
+            merged.photoCategories = [];
+          }
+        } else {
+          merged.photoCategories = [];
+          if (!photoSession.captured.sessionToken) log('  (no session token, skipping photo categories)');
+        }
+
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
 
         totalReviews += fetched;
@@ -533,7 +568,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           } catch (e) {}
         }
 
-        const merged = { ...place, detailedReviews: partialReviews, _error: err.message };
+        const merged = { ...place, detailedReviews: partialReviews, photoCategories: [], _error: err.message };
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
         totalReviews += partialReviews.length;
         totalErrors++;
