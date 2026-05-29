@@ -6,6 +6,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
+export TMPDIR="$SCRIPT_DIR/.tmp"
+export PLAYWRIGHT_BROWSERS_PATH="$SCRIPT_DIR/.playwright-browsers"
+mkdir -p "$TMPDIR" "$PLAYWRIGHT_BROWSERS_PATH"
+
 # Auto-bootstrap on first run
 if [ ! -f node_modules/.bootstrap-ok ]; then
   echo "First run detected — running bootstrap..."
@@ -90,6 +94,7 @@ main_menu() {
     echo "  [2] Stage 2 — POI search"
     echo "  [3] Stage 3 — Review scrape"
     echo "  [4] Stage 4 — Build SQLite DB from ndjson sources"
+    echo "  [5] Stage 5 — Image downloader (independent of stage 3)"
     echo ""
     echo "  [s] Show status across all cities"
     echo "  [q] Quit"
@@ -100,6 +105,7 @@ main_menu() {
       2) ./poi-search.sh ;;
       3) ./review-scrape.sh ;;
       4) node src/cli/db-wizard.js ;;
+      5) node src/cli/image-wizard.js ;;
       s|S) show_status; read -p "Press Enter to continue..." _ ;;
       q|Q) exit 0 ;;
       *) echo "Invalid selection."; sleep 1 ;;

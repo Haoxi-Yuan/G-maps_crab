@@ -1,8 +1,13 @@
 /**
  * API Review Fetcher
  *
- * Extracts reviews via Google Maps' internal /maps/rpc/listugcposts API endpoint.
- * ~10x faster than DOM scrolling, no ~3000 cap, gets 100% of reviews.
+ * Extracts reviews via Google Maps' internal MapsUgcPostService.ListUgcPosts
+ * RPC, served via the /maps/_/MapsWizUi/data/batchexecute gateway.
+ *
+ * (Google retired the old /maps/rpc/listugcposts GET endpoint; reviews now
+ *  ride on the same batchexecute infrastructure used by other Maps RPCs.
+ *  We capture one autonomous POST after the Reviews tab is clicked, then
+ *  replay it with mutated pagination tokens.)
  *
  * Usage (from Playwright page context):
  *   const fetcher = require('./api-review-fetcher');
@@ -10,10 +15,86 @@
  *
  * Requirements:
  *   - Page must have Reviews tab visible (two-step load completed)
- *   - Reviews tab must be clicked to trigger first API call
+ *   - Reviews tab will be clicked to trigger first API call
  */
 
 'use strict';
+
+const REVIEW_RPC_ID = 'qv9Egd'; // MapsUgcPostService.ListUgcPosts
+
+/**
+ * Parse Google's chunked batchexecute response and return the inner data
+ * for our service. Format on the wire:
+ *   )]}'\n
+ *   <len1>\n
+ *   [["wrb.fr","<service>","<json-as-string>",null,null,null,"generic"], ...]\n
+ *   <len2>\n
+ *   [["e",...]]  <- sentinel
+ *
+ * Returns parsed inner JSON array for the requested RPC, or null.
+ */
+function parseBatchexecuteResponse(text, rpcServicePath = '/MapsUgcPostService.ListUgcPosts') {
+  // Find the wrb.fr array by walking brackets — chunk lengths are byte-counted
+  // and unreliable to skip past in JS string space, so we bypass them entirely.
+  let pos = 0;
+  while (pos < text.length) {
+    const startIdx = text.indexOf('[["wrb.fr"', pos);
+    if (startIdx < 0) return null;
+    // Walk brackets to find matching close, respecting JSON string escapes
+    let depth = 0, end = -1, inStr = false, esc = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const c = text[i];
+      if (esc) { esc = false; continue; }
+      if (c === '\\') { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === '[') depth++;
+      else if (c === ']') { depth--; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end < 0) return null;
+    let envelope;
+    try { envelope = JSON.parse(text.slice(startIdx, end)); }
+    catch { pos = startIdx + 1; continue; }
+    // envelope = [["wrb.fr","<service>","<inner-as-string>",null,null,null,"generic"], ...]
+    for (const entry of envelope) {
+      if (Array.isArray(entry) && entry[0] === 'wrb.fr' && entry[1] === rpcServicePath) {
+        try { return JSON.parse(entry[2]); } catch { return null; }
+      }
+    }
+    pos = end;
+  }
+  return null;
+}
+
+/**
+ * Build a new POST body for the next pagination call by replacing the
+ * [pageSize, token] tuple in the inner JSON at position [1].
+ *
+ * The original body is URL-encoded form data:
+ *   f.req=<encoded-outer-json>&...
+ * where outer-json = [[["<service>", "<inner-as-string>", null, "generic"]]]
+ */
+function buildPaginatedBody(originalBody, nextToken, pageSize) {
+  const params = new URLSearchParams(originalBody);
+  const freq = params.get('f.req');
+  if (!freq) throw new Error('original body has no f.req');
+  const outer = JSON.parse(freq);
+  // outer = [[["<service>", "<inner-string>", null, "generic"]]]
+  const inner = JSON.parse(outer[0][0][1]);
+  // inner[1] = [pageSize, nextToken]
+  inner[1] = [pageSize, nextToken || ''];
+  outer[0][0][1] = JSON.stringify(inner);
+  params.set('f.req', JSON.stringify(outer));
+  return params.toString();
+}
+
+/**
+ * Increment the _reqid URL param. Google clients typically bump by 100000
+ * between calls; the server tolerates any monotonic value.
+ */
+function bumpReqId(url, step = 100000) {
+  return url.replace(/([?&]_reqid=)(\d+)/, (_, p, n) => p + (parseInt(n, 10) + step));
+}
 
 /**
  * Fetch all reviews for the current place via API pagination.
@@ -21,7 +102,7 @@
  * @param {import('playwright').Page} page - Playwright page with place loaded
  * @param {Object} opts
  * @param {number} [opts.maxReviews=25000] - Stop after this many reviews
- * @param {number} [opts.pageSize=20] - Reviews per API page (10 or 20, 50+ gets empty)
+ * @param {number} [opts.pageSize=10] - Reviews per API page (10 is Google's default; 20 also works)
  * @param {number} [opts.delayMs=200] - Delay between API calls
  * @param {Function} [opts.onProgress] - Callback(count, total) for progress reporting
  * @param {Function} [opts.onFlush] - Callback(reviewsBatch) for incremental persistence
@@ -31,21 +112,24 @@
 async function fetchAllReviews(page, opts = {}) {
   const {
     maxReviews = 25000,
-    pageSize = 20,
+    pageSize = 10,
     delayMs = 200,
-    reviewSort = 'newest',  // 'newest' gives deepest pagination
     onProgress = null,
     onFlush = null,
     flushEvery = 100,
   } = opts;
 
-  // Step 1: Detect review count + capture listugcposts URL
+  // --- Step 1: Detect count + capture the first ListUgcPosts POST ---
   let capturedUrl = null;
+  let capturedBody = null;
   let detectedCount = null;
 
-  // Listen for the API URL (any sort — we'll force the sort via regex later)
   const requestHandler = (req) => {
-    if (req.url().includes('listugcposts')) capturedUrl = req.url(); // Keep updating (last = best)
+    const u = req.url();
+    if (capturedUrl) return;
+    if (!u.includes('rpcids=' + REVIEW_RPC_ID)) return;
+    capturedUrl = u;
+    capturedBody = req.postData() || '';
   };
   page.on('request', requestHandler);
 
@@ -80,137 +164,138 @@ async function fetchAllReviews(page, opts = {}) {
 
   if (!tabClicked) {
     page.off('request', requestHandler);
-    return { reviews: [], detectedCount, error: 'reviews_tab_not_found' };
+    return { reviews: [], detectedCount, error: 'reviews_tab_not_found', stopReason: 'reviews_tab_not_found' };
   }
 
-  // Wait for API URL to be captured (tab click triggers it)
-  for (let i = 0; i < 20 && !capturedUrl; i++) {
+  // Wait for the first ListUgcPosts POST to fire (tab click triggers it)
+  for (let i = 0; i < 30 && !capturedBody; i++) {
     await page.waitForTimeout(500);
   }
   page.off('request', requestHandler);
 
-  if (!capturedUrl) {
-    return { reviews: [], detectedCount, error: 'api_url_not_captured' };
+  if (!capturedBody) {
+    return { reviews: [], detectedCount, error: 'api_url_not_captured', stopReason: 'api_url_not_captured' };
   }
 
-  // Step 2: Build the optimal URL — force pageSize and sort via regex
-  // No need for UI sort switching — just modify the URL params directly.
-  // Sort: !13m1!1eN (1=relevant, 2=newest, 3=highest, 4=lowest)
-  // PageSize: !1iN
-  // Pagination token: !2s (clear for first page)
-  const sortNumMap = { 'newest': 2, 'relevant': 1, 'highest': 3, 'lowest': 4 };
-  const sortNum = sortNumMap[reviewSort] || 2;
-  const baseUrl = capturedUrl
-    .replace(/!1i\d+/, '!1i' + pageSize)
-    .replace(/!13m1!1e\d+/, '!13m1!1e' + sortNum)
-    .replace(/!2s[^!]*/, '!2s'); // Clear pagination token for fresh start
   const effectiveMax = detectedCount ? Math.min(maxReviews, detectedCount) : maxReviews;
 
-  // Step 3: Paginate
+  // --- Step 2: Paginate via POST replay ---
   const reviews = [];
   const seenIds = new Set();
   let nextToken = '';
   let pageNum = 0;
+  let currentUrl = capturedUrl;
   let lastFlushAt = 0;
   let consecutiveEmpty = 0;
   let blocked = false;
+  // Tracks the FIRST terminating break path (see all the `break;` below);
+  // surfaced so callers can distinguish "Google ran out" from "we hit a bug".
+  let stopReason = null;
   const startTime = Date.now();
 
   while (reviews.length < effectiveMax) {
-    const apiUrl = nextToken
-      ? baseUrl.replace(/!2s[^!]*/, '!2s' + encodeURIComponent(nextToken))
-      : baseUrl.replace(/!2s[^!]*/, '!2s');
+    const postBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
+    const apiUrl = currentUrl;
 
-    let pageReviews;
+    let inner;
     try {
-      const resp = await page.evaluate(async (url) => {
-        const r = await fetch(url, { credentials: 'include' });
+      const resp = await page.evaluate(async ({ url, body }) => {
+        const r = await fetch(url, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body,
+        });
         if (!r.ok) return { error: r.status };
         return { text: await r.text() };
-      }, apiUrl);
+      }, { url: apiUrl, body: postBody });
 
       if (resp.error) {
         if (resp.error === 429 || resp.error === 403) {
-          // Rate limited or blocked — pause 30s and retry once
           if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing 30s...`);
           await page.waitForTimeout(30000);
-          const retry = await page.evaluate(async (url) => {
-            const r = await fetch(url, { credentials: 'include' });
+          const retry = await page.evaluate(async ({ url, body }) => {
+            const r = await fetch(url, {
+              method: 'POST', credentials: 'include',
+              headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+              body,
+            });
             if (!r.ok) return { error: r.status };
             return { text: await r.text() };
-          }, apiUrl);
-          if (retry.error) {
-            blocked = true;
-            break; // Second failure → give up API, fallback to DOM
-          }
-          const retryData = JSON.parse(retry.text.replace(/^\)\]\}'\n/, ''));
-          nextToken = retryData[1] || '';
-          pageReviews = retryData[2] || [];
+          }, { url: apiUrl, body: postBody });
+          if (retry.error) { blocked = true; stopReason = 'blocked_http_' + retry.error; break; }
+          inner = parseBatchexecuteResponse(retry.text);
         } else {
+          stopReason = 'http_error_' + resp.error;
           break;
         }
       } else {
-        const data = JSON.parse(resp.text.replace(/^\)\]\}'\n/, ''));
-        nextToken = data[1] || '';
-        pageReviews = data[2] || [];
+        inner = parseBatchexecuteResponse(resp.text);
       }
     } catch (e) {
-      // Parse error or network error — stop
+      stopReason = 'fetch_exception:' + (e && e.message || 'unknown').substring(0, 60);
       break;
     }
 
+    if (!inner) { stopReason = 'parse_failure'; break; }
+
+    // inner = [null, nextToken, reviewsArray]
+    nextToken = inner[1] || '';
+    const pageReviews = Array.isArray(inner[2]) ? inner[2] : [];
+
     if (pageReviews.length === 0) {
-      // Distinguish "normal end" vs "blocked": if we're far from detectedCount, it's likely a block
       const coverage = detectedCount ? (reviews.length / detectedCount) : 1;
       if (coverage < 0.8) {
-        // Suspect block — pause 30s and retry once
+        // Suspect block — pause and retry
         if (onProgress) onProgress(reviews.length, effectiveMax, 'Empty page, suspect block, pausing 30s...');
         await page.waitForTimeout(30000);
-        const retryResp = await page.evaluate(async (url) => {
-          const r = await fetch(url, { credentials: 'include' });
+        const retryBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
+        const retryResp = await page.evaluate(async ({ url, body }) => {
+          const r = await fetch(url, {
+            method: 'POST', credentials: 'include',
+            headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body,
+          });
           if (!r.ok) return { error: r.status };
           return { text: await r.text() };
-        }, apiUrl);
-        if (retryResp.error || !retryResp.text) {
-          blocked = true;
-          break;
+        }, { url: apiUrl, body: retryBody });
+        if (retryResp.error) { blocked = true; stopReason = 'blocked_low_coverage_http_' + retryResp.error; break; }
+        const retryInner = parseBatchexecuteResponse(retryResp.text);
+        if (!retryInner || !Array.isArray(retryInner[2]) || retryInner[2].length === 0) {
+          blocked = true; stopReason = 'blocked_low_coverage_empty_retry'; break;
         }
-        try {
-          const retryData = JSON.parse(retryResp.text.replace(/^\)\]\}'\n/, ''));
-          nextToken = retryData[1] || '';
-          pageReviews = retryData[2] || [];
-          if (pageReviews.length === 0) { blocked = true; break; } // Retry also empty → blocked
-        } catch (e) { blocked = true; break; }
+        nextToken = retryInner[1] || '';
+        pageReviews.push(...retryInner[2]);
       } else {
-        // Coverage >= 80%, likely natural end
         consecutiveEmpty++;
-        if (consecutiveEmpty >= 3) break;
+        if (consecutiveEmpty >= 3) { stopReason = 'consecutive_empty_pages'; break; }
         await page.waitForTimeout(1000);
+        if (!nextToken) { stopReason = 'no_token_after_empty'; break; }
+        currentUrl = bumpReqId(currentUrl);
         continue;
       }
     }
 
-    // Track actual new reviews added (not just pageReviews.length)
     const reviewsBefore = reviews.length;
 
-    // Extract review data
     for (const review of pageReviews) {
       if (reviews.length >= effectiveMax) break;
       try {
+        // Each review entry is [reviewBody, ?, ?] — the actual review data
+        // is at index [0] of the wrapper, mirroring the old listugcposts shape.
         const r = review[0];
+        if (!Array.isArray(r)) continue;
         const id = r[0];
-        if (seenIds.has(id)) continue;
+        if (!id || seenIds.has(id)) continue;
         seenIds.add(id);
 
         const reviewerInfo = r[1] || [];
         const contentInfo = r[2] || [];
 
-        // Timestamps: r[1][2] = created (microseconds), r[1][3] = edited (microseconds)
         const createdUs = reviewerInfo[2] || null;
         const editedUs = reviewerInfo[3] || null;
         const toISO = (us) => us && us > 1e12 ? new Date(us / 1000).toISOString() : null;
 
-        // Extract photos
         const photos = [];
         const photoArray = contentInfo[2] || [];
         for (const photo of photoArray) {
@@ -220,13 +305,11 @@ async function fetchAllReviews(page, opts = {}) {
           }
         }
 
-        // Owner response: r[3] contains reply metadata (no text in this API)
-        // r[3][1] = reply timestamp (microseconds), r[3][3] = relative time ("5 months ago")
         let ownerResponseAgo = null;
         let hasOwnerResponse = false;
         if (r[3] && Array.isArray(r[3]) && r[3][1]) {
           hasOwnerResponse = true;
-          ownerResponseAgo = r[3][3] || null; // e.g. "5 months ago"
+          ownerResponseAgo = r[3][3] || null;
         }
 
         reviews.push({
@@ -243,7 +326,7 @@ async function fetchAllReviews(page, opts = {}) {
           reviewer_review_count: reviewerInfo[4]?.[5]?.[5] || null,
           is_local_guide: !!(reviewerInfo[4]?.[5]?.[8]?.[0]),
           review_likes_count: reviewerInfo[15] || 0,
-          response_from_owner_text: null, // Not available in listugcposts API
+          response_from_owner_text: null,
           response_from_owner_ago: ownerResponseAgo,
           has_owner_response: hasOwnerResponse || undefined,
           review_images: photos.length > 0 ? photos : undefined,
@@ -254,35 +337,34 @@ async function fetchAllReviews(page, opts = {}) {
       }
     }
 
-    // Check if this page actually added new reviews
     const newThisPage = reviews.length - reviewsBefore;
     if (newThisPage === 0) {
       consecutiveEmpty++;
-      if (consecutiveEmpty >= 3) break; // 3 pages with no new unique reviews = done
+      if (consecutiveEmpty >= 3) { stopReason = 'consecutive_duplicate_pages'; break; }
     } else {
       consecutiveEmpty = 0;
     }
 
     pageNum++;
 
-    // Progress callback
     if (onProgress && pageNum % 10 === 0) {
       onProgress(reviews.length, effectiveMax);
     }
 
-    // Incremental flush
     if (onFlush && reviews.length - lastFlushAt >= flushEvery) {
       onFlush(reviews.slice(lastFlushAt));
       lastFlushAt = reviews.length;
     }
 
-    // No more pages
-    if (!nextToken) break;
-
+    if (!nextToken) { stopReason = 'no_token'; break; }
+    currentUrl = bumpReqId(currentUrl);
     await page.waitForTimeout(delayMs);
   }
 
-  // Final flush
+  if (stopReason === null) {
+    stopReason = reviews.length >= effectiveMax ? 'reached_max' : 'loop_exit';
+  }
+
   if (onFlush && reviews.length > lastFlushAt) {
     onFlush(reviews.slice(lastFlushAt));
   }
@@ -297,6 +379,7 @@ async function fetchAllReviews(page, opts = {}) {
     elapsed,
     pages: pageNum,
     blocked,
+    stopReason,
     error: blocked ? 'api_blocked_fallback_to_dom' : null,
   };
 }

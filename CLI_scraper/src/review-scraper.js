@@ -286,13 +286,9 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   }
 
-  // Logging: write to both console and log file
-  const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-  const log = (msg) => {
-    const line = msg;
-    console.log(line);
-    logStream.write(line + '\n');
-  };
+  // Logging: write to stdout only — the launching shell pipes to `tee -a <logfile>`,
+  // so writing to the file here would duplicate every line.
+  const log = (msg) => { console.log(msg); };
 
   // Read input: index placeId + byte offset per line using streaming (no full-file load)
   const placeIndex = []; // [{pid, name, expected, byteStart, byteEnd}]
@@ -350,6 +346,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     const NEWLINE = 0x0A;
     const DETAILED_MARK = Buffer.from('"detailedReviews"');
     const PLACEHOLDER_MARK = Buffer.from('"_placeholder":true');
+    const NETWORK_ERR_MARK = Buffer.from('"_network_error":true');
     const PID_RE = /"placeId"\s*:\s*"([^"]+)"/;
 
     let lineBufs = [];
@@ -370,19 +367,21 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
       // Byte-level scan for flag markers across all buffers, with a small
       // prevTail carry so marker bytes spanning two chunks still match.
-      const markerMax = Math.max(DETAILED_MARK.length, PLACEHOLDER_MARK.length);
+      const markerMax = Math.max(DETAILED_MARK.length, PLACEHOLDER_MARK.length, NETWORK_ERR_MARK.length);
       let hasDetailed = false;
       let isPlaceholder = false;
+      let isNetworkErr = false;
       let prevTail = Buffer.alloc(0);
       for (const b of lineBufs) {
         const scan = prevTail.length > 0 ? Buffer.concat([prevTail, b]) : b;
         if (!hasDetailed && scan.indexOf(DETAILED_MARK) >= 0) hasDetailed = true;
         if (!isPlaceholder && scan.indexOf(PLACEHOLDER_MARK) >= 0) isPlaceholder = true;
-        if (hasDetailed && isPlaceholder) break;
+        if (!isNetworkErr && scan.indexOf(NETWORK_ERR_MARK) >= 0) isNetworkErr = true;
+        if (hasDetailed && isPlaceholder && isNetworkErr) break;
         prevTail = scan.subarray(Math.max(0, scan.length - (markerMax - 1)));
       }
 
-      if (hasDetailed && !isPlaceholder) doneSet.add(m[1]);
+      if (hasDetailed && !isPlaceholder && !isNetworkErr) doneSet.add(m[1]);
       lineBufs = [];
     }
 
@@ -515,7 +514,8 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
         const fetched = reviewResult.reviews.length;
         const coverage = expected > 0 ? Math.round(fetched / expected * 100) + '%' : '-';
-        log(`  DONE: ${fetched}/${expected} (${coverage}) | ${reviewResult.withText || 0} text | ${reviewResult.elapsed || 0}s${reviewResult.error ? ' ERR:' + reviewResult.error : ''}`);
+        const stopTag = reviewResult.stopReason ? ` stop:${reviewResult.stopReason}` : '';
+        log(`  DONE: ${fetched}/${expected} (${coverage}) | ${reviewResult.withText || 0} text | ${reviewResult.elapsed || 0}s${reviewResult.error ? ' ERR:' + reviewResult.error : ''}${stopTag}`);
 
         // Supplement missing fields from preview/place response
         const supplement = extractSupplementFromPreview(previewData);
@@ -568,7 +568,17 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           } catch (e) {}
         }
 
-        const merged = { ...place, detailedReviews: partialReviews, photoCategories: [], _error: err.message };
+        // Mark network-layer failures so the resume scan can re-queue them on
+        // the next run. These errors fire BEFORE the review API is even hit;
+        // partial data is impossible, the place was lost entirely.
+        const isNetworkErr = /net::ERR_(NAME_NOT_RESOLVED|INTERNET_DISCONNECTED|NETWORK_CHANGED|CONNECTION_RESET|CONNECTION_REFUSED|CONNECTION_TIMED_OUT|ADDRESS_UNREACHABLE|TIMED_OUT|FAILED)|Timeout \d+ms exceeded/i.test(err.message || '');
+        const merged = {
+          ...place,
+          detailedReviews: partialReviews,
+          photoCategories: [],
+          _error: err.message,
+          ...(isNetworkErr && partialReviews.length === 0 ? { _network_error: true } : {}),
+        };
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
         totalReviews += partialReviews.length;
         totalErrors++;
@@ -579,7 +589,6 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   } finally {
     await browser.close().catch(() => {});
-    logStream.end();
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
