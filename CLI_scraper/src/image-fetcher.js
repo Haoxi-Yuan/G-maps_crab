@@ -116,12 +116,23 @@ function nowISO() { return new Date().toISOString(); }
 //  URL helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Strip size suffix `=sNNN-wNNN-hNNN-...` so equal-content URLs hash to the
-// same sha regardless of requested resolution. Returns { base, hadSize }.
+// Strip the size suffix (e.g. `=w203-h304-k-no`, `=s0`, `=k-no`) so equal-
+// content URLs hash to the same sha regardless of requested resolution, and so
+// a new suffix can be appended without producing a malformed double `=...`.
+//
+// googleusercontent URLs carry the size spec as `=<tokens>` after the final
+// path segment, with no query string and no other `=`. So: take everything
+// after the last `=`, and if it's a dash-joined run of alphanumeric tokens
+// (w203, h304, k, no, s0, c, ...), treat it as the suffix. This is more robust
+// than an explicit letter class (the old one omitted `o`, so `-k-no` never
+// matched and the suffix got concatenated → HTTP 400).
 function stripSizeSuffix(url) {
-  const m = url.match(/^(.+?)(=[swhcrpkfdnal\d-]+)$/);
-  if (m && /^=[-swhcrpkfdnal\d]+$/.test(m[2])) {
-    return { base: m[1], hadSize: true };
+  const eq = url.lastIndexOf('=');
+  if (eq > url.lastIndexOf('/')) {
+    const suffix = url.slice(eq + 1);
+    if (/^[a-z0-9]+(-[a-z0-9]+)*$/i.test(suffix)) {
+      return { base: url.slice(0, eq), hadSize: true };
+    }
   }
   return { base: url, hadSize: false };
 }
@@ -412,21 +423,7 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
     WHERE sha = ?
   `);
   try {
-    let buf, mime;
-    try {
-      ({ buf, mime } = await fetchBuffer(blob.url_full));
-    } catch (e) {
-      // gps-cs-s (place) photo URLs reject size suffixes that lack the -k-no
-      // modifier with HTTP 400. Retry once with -k-no appended as a safety net
-      // for custom suffixes that omit it.
-      if (/HTTP 400/.test(e.message) && !/-k-no(\W|$)/.test(blob.url_full)
-          && !/=$|googleusercontent\.com\/[^=]*$/.test(blob.url_full)) {
-        const retryUrl = blob.url_full + '-k-no';
-        ({ buf, mime } = await fetchBuffer(retryUrl));
-      } else {
-        throw e;
-      }
-    }
+    const { buf, mime } = await fetchBuffer(blob.url_full);
     if (!buf || buf.length < 1024) {
       throw new Error(`payload too small (${buf?.length || 0} bytes)`);
     }
