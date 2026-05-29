@@ -412,7 +412,21 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
     WHERE sha = ?
   `);
   try {
-    const { buf, mime } = await fetchBuffer(blob.url_full);
+    let buf, mime;
+    try {
+      ({ buf, mime } = await fetchBuffer(blob.url_full));
+    } catch (e) {
+      // gps-cs-s (place) photo URLs reject size suffixes that lack the -k-no
+      // modifier with HTTP 400. Retry once with -k-no appended as a safety net
+      // for custom suffixes that omit it.
+      if (/HTTP 400/.test(e.message) && !/-k-no(\W|$)/.test(blob.url_full)
+          && !/=$|googleusercontent\.com\/[^=]*$/.test(blob.url_full)) {
+        const retryUrl = blob.url_full + '-k-no';
+        ({ buf, mime } = await fetchBuffer(retryUrl));
+      } else {
+        throw e;
+      }
+    }
     if (!buf || buf.length < 1024) {
       throw new Error(`payload too small (${buf?.length || 0} bytes)`);
     }

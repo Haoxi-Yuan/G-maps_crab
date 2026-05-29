@@ -296,19 +296,23 @@ async function flowNewTask(rl) {
     'Include video thumbnails? (mediaType=video — only thumbnails, not mp4)', 'n');
 
   // Step 4 — size
-  const sizeIdx = await pickOne(rl, 'Step 4/6 — Image size:', [
+  // NB: gps-cs-s (place) photo URLs return HTTP 400 unless the suffix carries
+  // the -k-no modifier; grass-cs (review) URLs tolerate either. So every preset
+  // ends in -k-no for cross-source correctness. (The fetcher also retries a 400
+  // by appending -k-no as a safety net for custom suffixes.)
+  const sizeIdx = await pickOne(rl, 'Step 4/7 — Image size:', [
     's1024-w1024-h1024-k-no  (1024² no-crop, balanced)',
-    'w800-h600              (800×600)',
-    'w1600-h1200            (high-res)',
-    's400                   (thumbnail)',
-    'raw                    (Google default)',
+    'w800-h600-k-no          (800×600)',
+    'w1600-h1200-k-no        (high-res)',
+    's400-k-no               (thumbnail)',
+    'raw                     (Google default)',
     'custom...',
   ]);
   const sizeOptions = [
     's1024-w1024-h1024-k-no',
-    'w800-h600',
-    'w1600-h1200',
-    's400',
+    'w800-h600-k-no',
+    'w1600-h1200-k-no',
+    's400-k-no',
     'raw',
     null,
   ];
