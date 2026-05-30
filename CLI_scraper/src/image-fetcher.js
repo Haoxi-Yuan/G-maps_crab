@@ -586,13 +586,23 @@ async function workerLoop(db, task, imagesRoot) {
     // 3) Pull a batch of pending blobs FOR THIS TASK.
     const batch = pickPending.all(task.task_id, task.max_retries, task.concurrency * 4);
     if (batch.length === 0) {
-      consecutiveEmpty++;
-      if (task.mode === 'oneshot' && consecutiveEmpty >= 2) break;
-      // follow mode: idle a bit and let the tail loop add more
-      await new Promise((r) => setTimeout(r, 2000));
+      // Authoritative remaining-count check before deciding to exit — an empty
+      // batch alone isn't proof (transient race / rate-limit cooldown).
+      const left = db.prepare(
+        `SELECT COUNT(DISTINCT b.sha) AS n FROM blobs b
+         JOIN refs r ON r.sha = b.sha
+         WHERE r.task_id = ? AND b.status IN ('pending','failed') AND b.attempts < ?`
+      ).get(task.task_id, task.max_retries);
+      if (left.n === 0) {
+        if (task.mode === 'oneshot') break;
+        // follow mode: idle and let the ingest tail add more
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      // batch empty but work remains — brief wait, then retry
+      await new Promise((r) => setTimeout(r, 500));
       continue;
     }
-    consecutiveEmpty = 0;
 
     // 4) Download with bounded concurrency.
     const promises = batch.map(async (blob) => {
