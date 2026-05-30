@@ -609,6 +609,11 @@ async function workerLoop(db, task, imagesRoot) {
     updateTask.run('running', nowISO(), task.task_id);
   }
 
+  // Final link reconciliation: link any blob that finished but whose ref
+  // didn't get materialized inline (e.g. a transient link error mid-run).
+  const linked = await materializeLinks(db, task, imagesRoot);
+  if (linked > 0) console.log(`[task ${task.task_id}] materialized ${linked} links (final pass)`);
+
   // Mark task done if no failures left.
   const remaining = db.prepare(
     `SELECT COUNT(*) AS n FROM blobs b
