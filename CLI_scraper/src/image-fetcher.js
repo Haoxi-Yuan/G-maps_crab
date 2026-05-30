@@ -325,6 +325,47 @@ function computeLinkPath(city, ref, sha) {
 // (GFW-blocked) route. Set once in main() from --bind / IMAGE_BIND_IP.
 let BIND_ADDRESS = null;
 
+// Auto-detect the tunnel egress IP: the IPv4 on a utun* interface in the
+// 10.x range (the NUS/Cisco tunnel). The utun index and the exact address
+// both change on every VPN reconnect, so this is always recomputed at startup
+// rather than trusting a value persisted in the manifest.
+function detectTunnelIP() {
+  const os = require('os');
+  const ifaces = os.networkInterfaces();
+  for (const [name, addrs] of Object.entries(ifaces)) {
+    if (!/^utun\d+/.test(name)) continue;
+    for (const a of addrs || []) {
+      if (a.family === 'IPv4' && a.address.startsWith('10.')) return a.address;
+    }
+  }
+  return null;
+}
+
+// Resolve the source IP to actually bind. A bind to an address not currently
+// assigned to any interface fails every request with EADDRNOTAVAIL, so:
+//   - if the requested IP is live, use it;
+//   - else if it looks like a stale tunnel IP (10.x), substitute the current
+//     tunnel IP and warn;
+//   - else use it as-is (let the OS error surface meaningfully).
+function resolveBindAddress(requested) {
+  if (!requested) return null;
+  const os = require('os');
+  const live = new Set();
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) if (a.family === 'IPv4') live.add(a.address);
+  }
+  if (live.has(requested)) return requested;
+  if (requested.startsWith('10.')) {
+    const cur = detectTunnelIP();
+    if (cur && cur !== requested) {
+      console.warn(`[bind] requested ${requested} not live; using current tunnel IP ${cur}`);
+      return cur;
+    }
+  }
+  console.warn(`[bind] requested ${requested} not assigned to any interface; binding may fail`);
+  return requested;
+}
+
 function fetchBuffer(url, timeoutMs = 20000, redirects = 3) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -385,13 +426,35 @@ async function writeBlobAtomically(blobsRoot, sha, buf) {
   return final;
 }
 
+// Materialize the per-place view entry. Prefer a hard link (cheapest, true
+// dedup), but many filesystems (exFAT, some network/FUSE volumes — e.g. the
+// external /Volumes disk this often runs on) reject cross-name links with
+// ENOTSUP/EPERM. Fall back to a relative symlink, then to a full copy, so the
+// by-place tree is always populated regardless of the underlying FS.
 async function createHardLinkSafe(blobAbs, linkAbs) {
   await fsp.mkdir(path.dirname(linkAbs), { recursive: true });
+  // 1) hard link
   try {
     await fsp.link(blobAbs, linkAbs);
+    return;
   } catch (e) {
-    if (e.code === 'EEXIST') return; // already linked
-    throw e;
+    if (e.code === 'EEXIST') return; // already materialized
+    if (!['ENOTSUP', 'EPERM', 'EXDEV', 'EMLINK', 'EOPNOTSUPP'].includes(e.code)) throw e;
+  }
+  // 2) relative symlink (relative target survives moving the whole images dir)
+  try {
+    const rel = path.relative(path.dirname(linkAbs), blobAbs);
+    await fsp.symlink(rel, linkAbs);
+    return;
+  } catch (e) {
+    if (e.code === 'EEXIST') return;
+    if (!['ENOTSUP', 'EPERM', 'EOPNOTSUPP'].includes(e.code)) throw e;
+  }
+  // 3) copy
+  try {
+    await fsp.copyFile(blobAbs, linkAbs);
+  } catch (e) {
+    if (e.code !== 'EEXIST') throw e;
   }
 }
 
@@ -457,10 +520,41 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
   }
 }
 
+// Materialize by-place entries for every already-downloaded blob whose refs
+// aren't yet linked. Self-healing: covers blobs that were downloaded before
+// link support existed, links that failed on a now-changed filesystem, or a
+// manual `link_created` reset. Safe to call repeatedly.
+async function materializeLinks(db, task, imagesRoot) {
+  const rows = db.prepare(`
+    SELECT r.ref_id, r.link_path, b.local_path
+    FROM refs r JOIN blobs b ON b.sha = r.sha
+    WHERE r.task_id = ? AND r.link_created = 0 AND b.status = 'done' AND b.local_path IS NOT NULL
+  `).all(task.task_id);
+  if (rows.length === 0) return 0;
+  const mark = db.prepare('UPDATE refs SET link_created = 1 WHERE ref_id = ?');
+  let n = 0;
+  for (const r of rows) {
+    try {
+      const finalAbs = path.join(imagesRoot, r.local_path);
+      const linkAbs = path.join(imagesRoot, r.link_path);
+      await createHardLinkSafe(finalAbs, linkAbs);
+      mark.run(r.ref_id);
+      n++;
+    } catch (e) {
+      // leave link_created = 0; a later pass retries
+    }
+  }
+  return n;
+}
+
 async function workerLoop(db, task, imagesRoot) {
   const blobsRoot = path.join(imagesRoot, '_blobs');
   await fsp.mkdir(blobsRoot, { recursive: true });
   const sem = new Semaphore(task.concurrency);
+
+  // Heal any pre-existing done-but-unlinked refs before downloading more.
+  const healed = await materializeLinks(db, task, imagesRoot);
+  if (healed > 0) console.log(`[task ${task.task_id}] materialized ${healed} pre-existing links`);
 
   const getTaskState = db.prepare('SELECT state FROM tasks WHERE task_id = ?');
   const updateTask = db.prepare('UPDATE tasks SET state = ?, updated_at = ? WHERE task_id = ?');
@@ -475,7 +569,6 @@ async function workerLoop(db, task, imagesRoot) {
   `);
 
   let rateLimitedUntil = 0;
-  let consecutiveEmpty = 0;
 
   while (true) {
     // 1) Check task state — pause / kill respect.
@@ -638,7 +731,8 @@ async function main() {
   // Source-IP binding: egress via a specific local interface (the NUS tunnel)
   // so downloads dodge the GFW-blocked default route. Precedence:
   //   --bind flag > IMAGE_BIND_IP env > task.bind_ip (from DB).
-  BIND_ADDRESS = args.bind || process.env.IMAGE_BIND_IP || task.bind_ip || null;
+  const requestedBind = args.bind || process.env.IMAGE_BIND_IP || task.bind_ip || null;
+  BIND_ADDRESS = resolveBindAddress(requestedBind);
   if (BIND_ADDRESS) console.log(`[task ${taskId}] bind source IP: ${BIND_ADDRESS}`);
 
   // Alternatively route ALL https downloads through a proxy if configured.
