@@ -122,6 +122,7 @@ async function fetchAllReviews(page, opts = {}) {
   // --- Step 1: Detect count + capture the first ListUgcPosts POST ---
   let capturedUrl = null;
   let capturedBody = null;
+  let capturedHeaders = null;
   let detectedCount = null;
 
   const requestHandler = (req) => {
@@ -130,6 +131,24 @@ async function fetchAllReviews(page, opts = {}) {
     if (!u.includes('rpcids=' + REVIEW_RPC_ID)) return;
     capturedUrl = u;
     capturedBody = req.postData() || '';
+    // Google now enforces per-request anti-bot headers on the batchexecute
+    // gateway (x-maps-bgbind = query context, x-maps-bgkey = signed token,
+    // x-same-domain, origin, sec-ch-ua, ...). A replay that omits them gets a
+    // 200 with an empty body `[null,null,null,null,null,true]` — which the
+    // pagination loop used to misread as "blocked". Capture the real headers
+    // and replay them verbatim. Drop forbidden/auto-managed ones (the browser
+    // fetch sets host/content-length/cookie itself; credentials:'include'
+    // carries cookies).
+    const raw = req.headers();
+    const hdr = {};
+    for (const [k, v] of Object.entries(raw || {})) {
+      const lk = k.toLowerCase();
+      if (lk.startsWith(':')) continue;
+      if (['host', 'content-length', 'cookie', 'accept-encoding', 'connection'].includes(lk)) continue;
+      hdr[k] = v;
+    }
+    if (!hdr['content-type']) hdr['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+    capturedHeaders = hdr;
   };
   page.on('request', requestHandler);
 
@@ -199,30 +218,30 @@ async function fetchAllReviews(page, opts = {}) {
 
     let inner;
     try {
-      const resp = await page.evaluate(async ({ url, body }) => {
+      const resp = await page.evaluate(async ({ url, body, headers }) => {
         const r = await fetch(url, {
           method: 'POST',
           credentials: 'include',
-          headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          headers,
           body,
         });
         if (!r.ok) return { error: r.status };
         return { text: await r.text() };
-      }, { url: apiUrl, body: postBody });
+      }, { url: apiUrl, body: postBody, headers: capturedHeaders });
 
       if (resp.error) {
         if (resp.error === 429 || resp.error === 403) {
           if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing 30s...`);
           await page.waitForTimeout(30000);
-          const retry = await page.evaluate(async ({ url, body }) => {
+          const retry = await page.evaluate(async ({ url, body, headers }) => {
             const r = await fetch(url, {
               method: 'POST', credentials: 'include',
-              headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+              headers,
               body,
             });
             if (!r.ok) return { error: r.status };
             return { text: await r.text() };
-          }, { url: apiUrl, body: postBody });
+          }, { url: apiUrl, body: postBody, headers: capturedHeaders });
           if (retry.error) { blocked = true; stopReason = 'blocked_http_' + retry.error; break; }
           inner = parseBatchexecuteResponse(retry.text);
         } else {
@@ -250,15 +269,15 @@ async function fetchAllReviews(page, opts = {}) {
         if (onProgress) onProgress(reviews.length, effectiveMax, 'Empty page, suspect block, pausing 30s...');
         await page.waitForTimeout(30000);
         const retryBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
-        const retryResp = await page.evaluate(async ({ url, body }) => {
+        const retryResp = await page.evaluate(async ({ url, body, headers }) => {
           const r = await fetch(url, {
             method: 'POST', credentials: 'include',
-            headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            headers,
             body,
           });
           if (!r.ok) return { error: r.status };
           return { text: await r.text() };
-        }, { url: apiUrl, body: retryBody });
+        }, { url: apiUrl, body: retryBody, headers: capturedHeaders });
         if (retryResp.error) { blocked = true; stopReason = 'blocked_low_coverage_http_' + retryResp.error; break; }
         const retryInner = parseBatchexecuteResponse(retryResp.text);
         if (!retryInner || !Array.isArray(retryInner[2]) || retryInner[2].length === 0) {
