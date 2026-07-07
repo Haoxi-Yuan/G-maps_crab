@@ -29,6 +29,10 @@ const DEFAULT_ARGS = [
   '--no-default-browser-check',
   '--disable-session-crashed-bubble',
   '--disable-search-engine-choice-screen',
+  // Cap on-disk HTTP cache to effectively zero. Long scrapes don't benefit
+  // from reusing Google Maps tiles/JS across page loads, and the default
+  // per-profile cache can grow to several GB in $TMPDIR over a multi-hour run.
+  '--disk-cache-size=1',
 ];
 
 // Stealth arguments (from Scrapling STEALTH_ARGS)

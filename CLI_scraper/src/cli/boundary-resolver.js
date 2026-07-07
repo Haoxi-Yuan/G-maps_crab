@@ -12,10 +12,13 @@
 
 const https = require('https');
 
+// Order matters: tried top-to-bottom. overpass-api.de is the canonical
+// upstream and historically the most reliable; the community mirrors are
+// kept as fallbacks for when upstream is rate-limiting.
 const OVERPASS_URLS = [
+  'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
-  'https://overpass-api.de/api/interpreter',
 ];
 const UA = 'gmaps-crab/1.0 (boundary-resolver)';
 const MIN_GAP_MS = 1000;
@@ -26,11 +29,32 @@ function _postOnce(query, overpassUrl) {
   return new Promise((resolve, reject) => {
     const u = new URL(overpassUrl);
     const body = `data=${encodeURIComponent(query)}`;
+    // Guard against double-settle: req.destroy() on timeout can synchronously
+    // emit an 'error' event with an empty message that would otherwise
+    // overwrite the real 'Request timeout' reason.
+    let settled = false;
+    const finish = (err, val) => {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err); else resolve(val);
+    };
+    const tagError = (err) => {
+      if (err && typeof err === 'object') {
+        err.url = overpassUrl;
+      }
+      return err;
+    };
     const req = https.request({
       hostname: u.hostname,
       path: u.pathname,
       method: 'POST',
       timeout: 90000,
+      // Force Happy Eyeballs even on Node versions where it's not the default.
+      // Some Overpass mirrors advertise IPv6 AAAA records that route to dead
+      // hosts; without this, the request silently waits ~90s per attempt
+      // before falling back. 500ms is enough for v6 to win when it's healthy.
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 500,
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': Buffer.byteLength(body),
@@ -41,35 +65,48 @@ function _postOnce(query, overpassUrl) {
       res.on('data', (c) => { buf += c; });
       res.on('end', () => {
         if (res.statusCode === 200) {
-          try { resolve(JSON.parse(buf)); }
-          catch (e) { reject(new Error('Failed to parse Overpass response')); }
+          try { finish(null, JSON.parse(buf)); }
+          catch (e) { finish(tagError(new Error('Failed to parse Overpass response'))); }
         } else {
-          reject(new Error(`Overpass API returned status ${res.statusCode}`));
+          const err = new Error(`Overpass API returned status ${res.statusCode}`);
+          err.statusCode = res.statusCode;
+          err.bodySnippet = buf.slice(0, 200);
+          finish(tagError(err));
         }
       });
     });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
+    req.on('error', (err) => finish(tagError(err)));
+    req.on('timeout', () => {
+      finish(tagError(new Error('Request timeout')));
+      req.destroy();
+    });
     req.write(body);
     req.end();
   });
 }
 
 async function overpassPost(query) {
-  let lastErr = null;
+  const attempts = [];
   for (const url of OVERPASS_URLS) {
     const gap = MIN_GAP_MS - (Date.now() - _lastQueryAt);
     if (gap > 0) await new Promise((r) => setTimeout(r, gap));
     _lastQueryAt = Date.now();
     try { return await _postOnce(query, url); }
     catch (e) {
-      lastErr = e;
+      attempts.push({ url, error: e });
       const msg = String(e && e.message || '');
-      const transient = /status (429|502|503|504)|timeout|ECONN|ETIMEDOUT|ENOTFOUND/i.test(msg);
-      if (!transient) throw e;
+      const code = String(e && e.code || '');
+      const transient = /status (429|502|503|504)|timeout|ECONN|ETIMEDOUT|ENOTFOUND/i.test(msg)
+        || /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(code);
+      if (!transient) {
+        e.attempts = attempts;
+        throw e;
+      }
     }
   }
-  throw lastErr || new Error('All Overpass mirrors failed');
+  const agg = new Error('All Overpass mirrors failed');
+  agg.attempts = attempts;
+  throw agg;
 }
 
 function _candidateFromNominatim(r, fallbackCountry = null, fallbackCC = null) {
@@ -390,6 +427,8 @@ async function _nominatimGet(path) {
       path,
       method: 'GET',
       timeout: 20000,
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 500,
       headers: { 'User-Agent': UA, 'Accept-Language': 'en' },
     }, (res) => {
       let buf = '';

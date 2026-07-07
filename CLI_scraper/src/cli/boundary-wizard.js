@@ -119,7 +119,17 @@ async function main() {
       try {
         candidates = await listCandidates(cityName);
       } catch (e) {
-        console.error('Overpass query failed:', e.message);
+        const detail = e && (e.message || e.code) || '(no error message)';
+        console.error('Overpass query failed:', detail);
+        if (e && e.attempts && e.attempts.length) {
+          console.error('Tried mirrors:');
+          for (const a of e.attempts) {
+            const err = a.error || {};
+            const msg = err.message || err.code || '(unknown)';
+            const extra = err.statusCode ? ` [HTTP ${err.statusCode}]` : '';
+            console.error(`  - ${a.url}: ${msg}${extra}`);
+          }
+        }
         process.exit(1);
       }
 
@@ -264,7 +274,20 @@ async function main() {
       try {
         overpassData = await fetchRelationGeometry(chosen.osm_id);
       } catch (e) {
-        console.error('Geometry fetch failed:', e.message);
+        const detail = e && (e.message || e.code) || '(no error message)';
+        console.error('Geometry fetch failed:', detail);
+        if (e && e.attempts && e.attempts.length) {
+          console.error('Tried mirrors:');
+          for (const a of e.attempts) {
+            const err = a.error || {};
+            const msg = err.message || err.code || '(unknown)';
+            const extra = err.statusCode ? ` [HTTP ${err.statusCode}]` : '';
+            console.error(`  - ${a.url}: ${msg}${extra}`);
+            if (err.bodySnippet) console.error(`    body: ${err.bodySnippet}`);
+          }
+        } else if (e && e.url) {
+          console.error(`Failing URL: ${e.url}`);
+        }
         process.exit(1);
       }
       const bg = new BoundaryGenerator();

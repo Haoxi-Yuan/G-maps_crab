@@ -19,7 +19,7 @@
 
 const fs = require('fs');
 const readline = require('readline');
-const { ringContains, pointInPolygon, pointInMultiPolygon } = require('./filter-by-boundary');
+const { buildContainsCheck } = require('./filter-by-boundary');
 
 // ============================================
 // Boundary pre-filter (skip cells outside boundary)
@@ -29,12 +29,7 @@ function loadBoundaryCheck(boundaryFile) {
   if (!boundaryFile || !fs.existsSync(boundaryFile)) return null;
   try {
     const data = JSON.parse(fs.readFileSync(boundaryFile, 'utf8'));
-    let geom;
-    if (data.type === 'FeatureCollection') geom = data.features[0].geometry;
-    else if (data.type === 'Feature') geom = data.geometry;
-    else geom = data;
-    if (geom.type === 'MultiPolygon') return (lat, lng) => pointInMultiPolygon(lat, lng, geom.coordinates);
-    if (geom.type === 'Polygon') return (lat, lng) => pointInPolygon(lat, lng, geom.coordinates);
+    return buildContainsCheck(data);
   } catch (e) {}
   return null;
 }
@@ -477,10 +472,21 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
   const onProgress = opts.onProgress || null;
   const boundaryCheck = opts._boundaryCheck || null;
 
-  // Skip cells whose center is outside the boundary (saves ~30% requests for border cities)
+  // Skip cells whose center is outside the boundary (saves ~30% requests for border cities).
+  // Center-only testing is wrong for concave or disjoint boundaries: a coarse
+  // cell can have its center in a gap while still containing whole boundary
+  // pieces. Sampling points are guaranteed in-boundary at ~cellSize density,
+  // so a cell holding any seed point must not be pruned.
   if (boundaryCheck && !boundaryCheck(bbox.centerLat, bbox.centerLng)) {
-    stats.skippedOutside = (stats.skippedOutside || 0) + 1;
-    return [];
+    const seeds = opts._seedPoints;
+    const cellHasSeed = Array.isArray(seeds) && seeds.some((p) =>
+      p.lat >= bbox.minLat && p.lat <= bbox.maxLat &&
+      p.lng >= bbox.minLng && p.lng <= bbox.maxLng
+    );
+    if (!cellHasSeed) {
+      stats.skippedOutside = (stats.skippedOutside || 0) + 1;
+      return [];
+    }
   }
 
   const zoom = cellSizeToZoom(bbox.sizeKm);
@@ -542,10 +548,19 @@ async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, stats, op
 
   const boundaryCheck = opts._boundaryCheck || null;
 
+  const seeds = opts._seedPoints;
+
   for (let lat = bbox.minLat + offsetLat; lat <= bbox.maxLat; lat += stepLat) {
     for (let lng = bbox.minLng + offsetLng; lng <= bbox.maxLng; lng += stepLng) {
-      // Skip cells outside boundary
-      if (boundaryCheck && !boundaryCheck(lat, lng)) continue;
+      // Skip cells outside boundary — same seed-point guard as searchCell:
+      // a 4km cell whose center is out may still contain a small boundary piece.
+      if (boundaryCheck && !boundaryCheck(lat, lng)) {
+        const cellHasSeed = Array.isArray(seeds) && seeds.some((p) =>
+          p.lat >= lat - offsetLat && p.lat <= lat + offsetLat &&
+          p.lng >= lng - offsetLng && p.lng <= lng + offsetLng
+        );
+        if (!cellHasSeed) continue;
+      }
 
       const { newIds } = await fetchCellPaginated(
         page, query, lat, lng, altitude, pbTemplate,
@@ -666,7 +681,7 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
         }
       };
 
-      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter };
+      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter, _seedPoints: points };
 
       // Phase 1: Quadtree with pagination
       await searchCell(page, category, bbox, pbTemplate, allPlaceIds, stats, 0, cellOpts);

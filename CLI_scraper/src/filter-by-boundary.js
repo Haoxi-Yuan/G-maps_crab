@@ -54,19 +54,44 @@ function pointInMultiPolygon(lat, lng, multiPolygon) {
   return false;
 }
 
+function collectPolygons(data) {
+  // Flatten any GeoJSON shape into MultiPolygon-style coordinates.
+  // Every Feature in a FeatureCollection contributes — a boundary file may
+  // hold several disjoint areas as separate Features, and all of them count.
+  const polys = [];
+  const addGeom = (geom) => {
+    if (!geom) return;
+    if (geom.type === 'Polygon') polys.push(geom.coordinates);
+    else if (geom.type === 'MultiPolygon') for (const p of geom.coordinates) polys.push(p);
+    else if (geom.type === 'GeometryCollection' && Array.isArray(geom.geometries)) {
+      for (const g of geom.geometries) addGeom(g);
+    }
+  };
+  if (data.type === 'FeatureCollection') {
+    for (const f of (data.features || [])) addGeom(f && f.geometry);
+  } else if (data.type === 'Feature') {
+    addGeom(data.geometry);
+  } else {
+    addGeom(data);
+  }
+  return polys;
+}
+
+function buildContainsCheck(data) {
+  const polys = collectPolygons(data);
+  if (polys.length === 0) {
+    throw new Error('No polygonal geometry found in boundary GeoJSON');
+  }
+  if (polys.length === 1) {
+    const poly = polys[0];
+    return (lat, lng) => pointInPolygon(lat, lng, poly);
+  }
+  return (lat, lng) => pointInMultiPolygon(lat, lng, polys);
+}
+
 function loadBoundary(boundaryFile) {
   const data = JSON.parse(fs.readFileSync(boundaryFile, 'utf8'));
-  let geom;
-  if (data.type === 'FeatureCollection') geom = data.features[0].geometry;
-  else if (data.type === 'Feature') geom = data.geometry;
-  else geom = data;
-
-  if (geom.type === 'MultiPolygon') {
-    return (lat, lng) => pointInMultiPolygon(lat, lng, geom.coordinates);
-  } else if (geom.type === 'Polygon') {
-    return (lat, lng) => pointInPolygon(lat, lng, geom.coordinates);
-  }
-  throw new Error(`Unsupported geometry type: ${geom.type}`);
+  return buildContainsCheck(data);
 }
 
 // ============================================
@@ -191,4 +216,7 @@ Removed places are saved to places_removed.ndjson for review.
   });
 }
 
-module.exports = { filterByBoundary, pointInPolygon, pointInMultiPolygon, ringContains };
+module.exports = {
+  filterByBoundary, pointInPolygon, pointInMultiPolygon, ringContains,
+  collectPolygons, buildContainsCheck, loadBoundary,
+};
