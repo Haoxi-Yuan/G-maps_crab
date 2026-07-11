@@ -302,7 +302,7 @@ async function main(opts) {
   const areas = splitAreas(opts.boundariesFile, opts.batchName);
   console.log(`[MULTI] ${areas.length} area(s) in ${opts.boundariesFile}:`);
 
-  const selected = opts.areaFilter
+  let selected = opts.areaFilter
     ? areas.filter((a) => opts.areaFilter.has(a.slug))
     : areas;
   if (opts.areaFilter) {
@@ -310,6 +310,15 @@ async function main(opts) {
     for (const want of opts.areaFilter) {
       if (!known.has(want)) console.warn(`[MULTI] WARNING: --areas slug not found: ${want}`);
     }
+  }
+
+  // Sharding: `--shard i/N` keeps a disjoint 1/N slice of the selected areas
+  // (round-robin by index) so N processes cover everything with no overlap.
+  // Run one per machine/IP; give each its own --sa-vocab to avoid a write race.
+  if (opts.shard) {
+    const { i, n } = opts.shard;
+    selected = selected.filter((_, idx) => idx % n === (i - 1));
+    console.log(`[MULTI] Shard ${i}/${n}: ${selected.length} of the selected areas`);
   }
 
   for (const a of areas) {
@@ -409,6 +418,7 @@ function parseArgs(argv) {
     bufferMeters: 0,
     dryRun: false,
     fresh: false,
+    shard: null,
     selfAdapt: false,
     saVocabFile: null,
     saMaxQueries: 300,
@@ -434,6 +444,7 @@ function parseArgs(argv) {
       case '--buffer': opts.bufferMeters = parseFloat(argv[++i]); break;
       case '--dry-run': opts.dryRun = true; break;
       case '--fresh': opts.fresh = true; break;
+      case '--shard': { const m = String(argv[++i]).match(/^(\d+)\/(\d+)$/); if (!m) throw new Error('--shard must be i/N, e.g. 1/6'); opts.shard = { i: parseInt(m[1], 10), n: parseInt(m[2], 10) }; break; }
       case '--self-adapt': opts.selfAdapt = true; break;
       case '--sa-vocab': opts.saVocabFile = argv[++i]; break;
       case '--sa-max-queries': opts.saMaxQueries = parseInt(argv[++i], 10); break;
@@ -467,6 +478,9 @@ Options:
   --sa-seeds a,b,c         Override the generic bootstrap seeds
   --sa-vocab <file>        Shared vocab file (default output/_selfadapt_vocab__<batch>.json)
   --areas slug1,slug2      Only run these areas (slugs from feature names)
+  --shard i/N              Run a disjoint 1/N slice of areas (round-robin). Launch
+                           N processes (1/N..N/N), one per machine/IP, to shard a
+                           batch. Give each its own --sa-vocab in self-adapt mode.
   --buffer <meters>        Expand each boundary outward by N m before search+filter (default 0)
   --cell-size <m>          Sampling density for stage 1 (default: 1000)
   --points <n>             Fixed number of sampling points per area (default: auto)

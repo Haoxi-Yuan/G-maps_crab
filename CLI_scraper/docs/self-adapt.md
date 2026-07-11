@@ -91,6 +91,23 @@ Flags:
 With no boundary loaded (whole-city runs), the in-boundary check passes everything,
 so the in-boundary signal falls back to raw yield automatically.
 
+### Sharding across machines/IPs
+
+`tbm=map` throttles a single IP quickly, so large batches run as N processes on N
+machines/IPs. `--shard i/N` keeps a disjoint round-robin 1/N slice of the areas;
+give each shard its own `--sa-vocab` to avoid a write race on the shared file:
+
+```bash
+# on each host, i = 1..6
+node src/multi-boundary-orchestrator.js \
+  --boundaries data/sg_parks_boundaries.geojson --name sg_parks \
+  --cell-size 200 --buffer 20 \
+  --self-adapt --sa-stop-after-dry 6 --sa-max-queries 80 \
+  --shard i/6 --sa-vocab output/_selfadapt_vocab__sg_parks_shard_i.json
+```
+
+Every shard is resume-safe independently (per-area `_area_complete.json`).
+
 ## What the code touches
 
 - `src/poi-searcher-api.js`
