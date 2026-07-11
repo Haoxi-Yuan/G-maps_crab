@@ -439,11 +439,21 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
     // matching prior placeStore semantics — duplicates within a run are dropped).
     let newThisPage = 0;
     for (const place of result.places) {
+      // In-boundary test (uses the same buffered boundary as the post-filter).
+      // With no boundary loaded (whole-city runs) every place counts as in.
+      const inBoundary = (place.lat != null && place.lng != null)
+        && (!opts._boundaryCheck || opts._boundaryCheck(place.lat, place.lng));
+      // Self-adapt discovery: only LEARN types from in-boundary POIs. Otherwise
+      // spread pulls the whole neighbourhood's vocabulary in and the closure
+      // never converges on a small area (fires for dup POIs too — a dup still
+      // confirms its type is relevant here).
+      if (opts._onCategory && place.mainCategory && inBoundary) opts._onCategory(place.mainCategory);
       if (!globalIds.has(place.ftid)) {
         globalIds.add(place.ftid);
         newIds.push(place.ftid);
         stats.totalIds++;
         newThisPage++;
+        if (inBoundary && opts._inBoundaryCounter) opts._inBoundaryCounter.count++;
         if (placeWriter) placeWriter.writeRecord(place, place.ftid);
       }
     }
@@ -651,17 +661,12 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       console.log(`[QUADTREE] Boundary pre-filter loaded from ${boundaryFile}`);
     }
 
-    let catIndex = 0;
-    const totalCategories = categories.length;
-
-    for (const category of categories) {
-      catIndex++;
-      if (completedCategories.has(category)) {
-        console.log(`[QUADTREE] Skipping ${category} (already done)`);
-        continue;
-      }
-
-      console.log(`\n[QUADTREE] === Category ${catIndex}/${totalCategories}: ${category} ===`);
+    // One search query (a category or a self-adapt-discovered type): full
+    // quadtree + offset-grid pass, streaming new POIs and bookkeeping. Shared by
+    // the fixed-category loop and the self-adapt closure. `onCategory` (optional)
+    // is the discovery hook that feeds returned mainCategories back to the closure.
+    const runOneQuery = async (query, catIndex, totalCategories, onCategory) => {
+      console.log(`\n[QUADTREE] === Query ${catIndex}/${totalCategories}: ${query} ===`);
 
       const stats = { requests: 0, errors: 0, totalIds: 0 };
       const catStartIds = allPlaceIds.size;
@@ -673,34 +678,58 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       const onProgress = (st, msg) => {
         console.log(`  ${msg} [total: ${allPlaceIds.size}]`);
         if (progressCallback) {
-          progressCallback(catIndex, totalCategories, `${category}: ${allPlaceIds.size} POIs (${st.requests} req)`);
+          progressCallback(catIndex, totalCategories, `${query}: ${allPlaceIds.size} POIs (${st.requests} req)`);
         }
         if (incrementalSaveFile && st.requests - lastSaveAt >= saveThrottle) {
           lastSaveAt = st.requests;
-          savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories, category, st.requests);
+          savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories, query, st.requests);
         }
       };
 
-      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter, _seedPoints: points };
+      // Per-query in-boundary counter — the meaningful yield signal for bounded
+      // areas (raw yield stays high from spread and never converges).
+      const inBoundaryCounter = { count: 0 };
+      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter, _seedPoints: points, _onCategory: onCategory || null, _inBoundaryCounter: inBoundaryCounter };
 
       // Phase 1: Quadtree with pagination
-      await searchCell(page, category, bbox, pbTemplate, allPlaceIds, stats, 0, cellOpts);
+      await searchCell(page, query, bbox, pbTemplate, allPlaceIds, stats, 0, cellOpts);
 
       // Phase 2: Offset grid pass
       if (options.enableOffsetGrid !== false && CONFIG.enableOffsetGrid) {
         console.log(`  [offset] Running offset grid pass...`);
-        await runOffsetGrid(page, category, bbox, pbTemplate, allPlaceIds, stats, cellOpts);
+        await runOffsetGrid(page, query, bbox, pbTemplate, allPlaceIds, stats, cellOpts);
       }
 
       const elapsed = Math.round((Date.now() - startTime) / 1000);
       const catNewIds = allPlaceIds.size - catStartIds;
+      const inBoundaryNew = boundaryCheck ? inBoundaryCounter.count : catNewIds;
 
-      results.push({ category, newPlaceIds: catNewIds, requests: stats.requests, errors: stats.errors, elapsed });
-      console.log(`[QUADTREE] ${category}: +${catNewIds} new POIs (${stats.requests} requests, ${elapsed}s)`);
+      results.push({ category: query, newPlaceIds: catNewIds, inBoundaryNew, requests: stats.requests, errors: stats.errors, elapsed });
+      console.log(`[QUADTREE] ${query}: +${catNewIds} new POIs (${inBoundaryNew} in-boundary) (${stats.requests} requests, ${elapsed}s)`);
       console.log(`[QUADTREE] Running total: ${allPlaceIds.size} unique POIs`);
 
-      // Save after each category
+      // Save after each query
       savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories);
+      // Self-adapt uses in-boundary yield for convergence + vocab ranking; the
+      // fixed-category loop ignores the return value.
+      return inBoundaryNew;
+    };
+
+    if (options.selfAdapt) {
+      // Category-free enumeration: generic seeds -> search -> harvest Google's own
+      // mainCategory labels off the results -> enqueue unseen types -> fixpoint.
+      await runSelfAdaptClosure(runOneQuery, allPlaceIds, completedCategories, options);
+    } else {
+      let catIndex = 0;
+      const totalCategories = categories.length;
+      for (const category of categories) {
+        catIndex++;
+        if (completedCategories.has(category)) {
+          console.log(`[QUADTREE] Skipping ${category} (already done)`);
+          continue;
+        }
+        await runOneQuery(category, catIndex, totalCategories);
+      }
     }
 
   } finally {
@@ -848,6 +877,99 @@ function loadCategories(configPath) {
   if (data.categories && Array.isArray(data.categories)) return data.categories;
   if (Array.isArray(data)) return data;
   throw new Error('Invalid categories config');
+}
+
+// ============================================
+// Self-adapting category discovery
+// ============================================
+
+const SA_DEFAULT_SEEDS = [
+  'restaurant', 'cafe', 'shop', 'store', 'supermarket', 'service', 'clinic',
+  'hospital', 'pharmacy', 'office', 'salon', 'hotel', 'school', 'bank', 'gym',
+  'market', 'park', 'church', 'car repair', 'bakery',
+];
+const saNorm = (c) => String(c || '').toLowerCase().trim();
+
+// Cross-area vocabulary: {ranked:[display...], byCat:{norm:{display,yield}}}.
+// `ranked` is yield-ordered so later areas search the highest-yield types first
+// (priority) and can truncate early — the "discover-once, harvest-everywhere" win.
+function loadVocab(file) {
+  if (!file) return { ranked: [], byCat: {} };
+  try {
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return { ranked: Array.isArray(v.ranked) ? v.ranked : [], byCat: v.byCat || {} };
+  } catch (e) { return { ranked: [], byCat: {} }; }
+}
+
+function saveVocab(file, catYield) {
+  if (!file) return;
+  const v = loadVocab(file);
+  const byCat = v.byCat || {};
+  for (const [c, y] of Object.entries(catYield)) {
+    const n = saNorm(c);
+    if (!n) continue;
+    if (!byCat[n]) byCat[n] = { display: c, yield: 0 };
+    byCat[n].yield += y;
+  }
+  const ranked = Object.values(byCat).sort((a, b) => b.yield - a.yield).map((e) => e.display);
+  try {
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ranked, byCat }, null, 0));
+    fs.renameSync(tmp, file);
+  } catch (e) { console.warn(`[SELF-ADAPT] vocab save failed: ${e.message}`); }
+}
+
+// Drive the closure: seed queue with (shared vocab, ranked) then generic seeds;
+// every returned POI's mainCategory that hasn't been searched is enqueued; run
+// until the queue drains, a query budget is hit, or K consecutive low-yield
+// queries signal convergence. Reuses runOneQuery (full quadtree + dedup + save).
+async function runSelfAdaptClosure(runOneQuery, allPlaceIds, completedCategories, options) {
+  const seeds = (options.saSeeds && options.saSeeds.length) ? options.saSeeds : SA_DEFAULT_SEEDS;
+  const maxQueries = options.saMaxQueries || 300;
+  const stopAfterDry = options.saStopAfterDry || 0;   // 0 = disabled
+  const minYield = options.saMinYield ?? 1;
+
+  const searched = new Set([...completedCategories].map(saNorm));
+  const queued = new Set();
+  const queue = [];
+  const catYield = {};
+  const enqueue = (c) => {
+    const n = saNorm(c);
+    if (!n || n === 'unknown' || searched.has(n) || queued.has(n)) return;
+    queued.add(n);
+    queue.push(String(c));
+  };
+
+  const vocab = loadVocab(options.saVocabFile);
+  for (const c of vocab.ranked) enqueue(c);   // priority: prior-area yield order
+  for (const s of seeds) enqueue(s);           // guarantee bootstrap even on a cold vocab
+
+  const onCategory = (mc) => enqueue(mc);
+  // Try the whole generic-seed set (+ primed vocab head) before allowing
+  // convergence, so an area isn't abandoned just because the first few seeds
+  // happen to have no in-boundary hits.
+  const minBeforeConverge = Math.min(seeds.length, 12);
+  let qIdx = completedCategories.size;
+  let ran = 0, dry = 0;
+  console.log(`[SELF-ADAPT] seeds=${seeds.length}, primed-from-vocab=${vocab.ranked.length}, budget=${maxQueries} queries, stopAfterDry=${stopAfterDry || 'off'} (on in-boundary yield)`);
+
+  while (queue.length && ran < maxQueries) {
+    const query = queue.shift();
+    const nq = saNorm(query);
+    if (searched.has(nq)) continue;
+    searched.add(nq);
+    const totalLabel = `~${searched.size + queue.length}`;
+    const y = await runOneQuery(query, ++qIdx, totalLabel, onCategory);
+    catYield[query] = (catYield[query] || 0) + y;   // y = in-boundary new POIs
+    ran++;
+    if (y < minYield) dry++; else dry = 0;
+    if (stopAfterDry && ran >= minBeforeConverge && dry >= stopAfterDry) {
+      console.log(`[SELF-ADAPT] Converged: ${dry} consecutive queries with <${minYield} in-boundary new POIs`);
+      break;
+    }
+  }
+  console.log(`[SELF-ADAPT] Done: ${ran} queries this run, ${searched.size} distinct searched, ${queue.length} still queued`);
+  saveVocab(options.saVocabFile, catYield);
 }
 
 // ============================================

@@ -252,6 +252,14 @@ async function scrapeArea(area, stage1, categories, opts) {
           saveInterval: opts.saveInterval,
           incrementalSaveFile,
           boundaryFile: stage1.boundaryPath,
+          // Self-adapt mode: category-free discovery, sharing one yield-ranked
+          // vocabulary file across all areas in the batch (discover-once).
+          selfAdapt: opts.selfAdapt,
+          saVocabFile: opts.saVocabFile,
+          saMaxQueries: opts.saMaxQueries,
+          saStopAfterDry: opts.saStopAfterDry,
+          saMinYield: opts.saMinYield,
+          saSeeds: opts.saSeeds,
         });
         break;
       } catch (e) {
@@ -320,13 +328,21 @@ async function main(opts) {
   }
 
   const api = require('./poi-searcher-api');
-  let categories = api.loadCategories(path.resolve(ROOT, opts.categoriesFile));
-  if (opts.categoryFilter) {
-    const wanted = new Set(opts.categoryFilter.map((s) => s.toLowerCase()));
-    categories = categories.filter((c) => wanted.has(c.toLowerCase()));
-    console.log(`[MULTI] Filtered to ${categories.length} categories: ${categories.join(', ')}`);
+  let categories = [];
+  if (opts.selfAdapt) {
+    // Category-free: batchSearchPOIs drives its own query set from Google's
+    // labels. Vocabulary is shared across the batch (one file) for discover-once.
+    if (!opts.saVocabFile) opts.saVocabFile = path.join(ROOT, 'output', `_selfadapt_vocab__${opts.batchName}.json`);
+    console.log(`[MULTI] Self-adapt mode: seeds -> Google-label closure, shared vocab ${opts.saVocabFile}, budget ${opts.saMaxQueries}/area`);
+  } else {
+    categories = api.loadCategories(path.resolve(ROOT, opts.categoriesFile));
+    if (opts.categoryFilter) {
+      const wanted = new Set(opts.categoryFilter.map((s) => s.toLowerCase()));
+      categories = categories.filter((c) => wanted.has(c.toLowerCase()));
+      console.log(`[MULTI] Filtered to ${categories.length} categories: ${categories.join(', ')}`);
+    }
+    if (categories.length === 0) throw new Error('No categories to search');
   }
-  if (categories.length === 0) throw new Error('No categories to search');
 
   const summary = [];
   let n = 0;
@@ -393,6 +409,12 @@ function parseArgs(argv) {
     bufferMeters: 0,
     dryRun: false,
     fresh: false,
+    selfAdapt: false,
+    saVocabFile: null,
+    saMaxQueries: 300,
+    saStopAfterDry: 0,
+    saMinYield: 1,
+    saSeeds: null,
   };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -412,6 +434,12 @@ function parseArgs(argv) {
       case '--buffer': opts.bufferMeters = parseFloat(argv[++i]); break;
       case '--dry-run': opts.dryRun = true; break;
       case '--fresh': opts.fresh = true; break;
+      case '--self-adapt': opts.selfAdapt = true; break;
+      case '--sa-vocab': opts.saVocabFile = argv[++i]; break;
+      case '--sa-max-queries': opts.saMaxQueries = parseInt(argv[++i], 10); break;
+      case '--sa-stop-after-dry': opts.saStopAfterDry = parseInt(argv[++i], 10); break;
+      case '--sa-min-yield': opts.saMinYield = parseInt(argv[++i], 10); break;
+      case '--sa-seeds': opts.saSeeds = argv[++i].split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--help':
         console.log(`
 Multi-Boundary Orchestrator — scrape several disjoint boundaries in one run
@@ -430,6 +458,14 @@ Options:
   --name <batch>           Batch name, prefixes every area directory (required)
   --categories <file>      Category taxonomy (default: config/categories.json)
   --category-filter a,b    Only search these categories
+  --self-adapt             Category-free: discover types from Google's own labels
+                           (generic seeds -> closure), no hand-curated taxonomy.
+                           One yield-ranked vocab shared across the batch.
+  --sa-max-queries N       Query budget per area in self-adapt mode (default 300)
+  --sa-stop-after-dry K    Stop an area after K consecutive <min-yield queries (0=off)
+  --sa-min-yield N         "Dry" query = fewer than N new POIs (default 1)
+  --sa-seeds a,b,c         Override the generic bootstrap seeds
+  --sa-vocab <file>        Shared vocab file (default output/_selfadapt_vocab__<batch>.json)
   --areas slug1,slug2      Only run these areas (slugs from feature names)
   --buffer <meters>        Expand each boundary outward by N m before search+filter (default 0)
   --cell-size <m>          Sampling density for stage 1 (default: 1000)
