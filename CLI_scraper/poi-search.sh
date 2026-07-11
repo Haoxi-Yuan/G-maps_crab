@@ -4,6 +4,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+export TMPDIR="$SCRIPT_DIR/.tmp"
+export PLAYWRIGHT_BROWSERS_PATH="$SCRIPT_DIR/.playwright-browsers"
+mkdir -p "$TMPDIR" "$PLAYWRIGHT_BROWSERS_PATH"
+
 # ============================================
 # Defaults
 # ============================================
@@ -19,6 +23,9 @@ POINTS_FILE=""
 OUTPUT_FILE=""
 CAT_FILTER=""
 BBOX_INPUT=""
+SELF_ADAPT=false       # category-free discovery from Google's own labels
+SA_MAX_QUERIES=300
+SA_STOP_DRY=0
 
 # ============================================
 # Parse CLI arguments (non-interactive mode)
@@ -39,6 +46,9 @@ parse_args() {
       --delay)     DELAY="$2"; shift 2 ;;
       --cell-size) CELL_SIZE="$2"; shift 2 ;;
       --fresh)     FRESH=1; shift ;;
+      --self-adapt) SELF_ADAPT=true; shift ;;
+      --sa-max-queries) SA_MAX_QUERIES="$2"; shift 2 ;;
+      --sa-stop-after-dry) SA_STOP_DRY="$2"; shift 2 ;;
       --status)    show_status; exit 0 ;;
       --stop)      STOP_CITY="${2:-}"; stop_background; exit 0 ;;
       --help)      show_help; exit 0 ;;
@@ -66,6 +76,9 @@ show_help() {
   echo "  --points <file>   Points file (auto-detected from city if omitted)"
   echo "  --output <file>   Output file (default: output/{city}_poi_search.json)"
   echo "  --categories <list>  Comma-separated category filter"
+  echo "  --self-adapt         Category-free: discover types from Google's own labels"
+  echo "  --sa-max-queries N   Self-adapt query budget (default 300)"
+  echo "  --sa-stop-after-dry K  Stop after K consecutive dry in-boundary queries (0=off)"
   echo "  --bbox <coords>   Bounding box: minLng,minLat,maxLng,maxLat"
   echo "  --max-depth <n>   Max quadtree depth (default: 8)"
   echo "  --min-cell <km>   Min cell size in km (default: 0.06)"
@@ -278,6 +291,19 @@ build_node_command() {
     "
   fi
 
+  # Boundary file for in-search cell pre-filter (skip cells outside the city
+  # boundary). Must be set BEFORE the node command template references it; the
+  # local BOUNDARY_FILE in run_search/interactive is only for the post-filter.
+  BOUNDARY_FILE=$(ls "${CITY_DIR}/"*_boundary.geojson 2>/dev/null | head -1)
+
+  # Self-adapt shared vocab lives next to the output (persists discovered types
+  # across resumes); null in fixed-taxonomy mode.
+  if [ "$SELF_ADAPT" = true ]; then
+    SA_VOCAB_JS="'$(dirname "$OUTPUT_FILE")/_selfadapt_vocab.json'"
+  else
+    SA_VOCAB_JS="null"
+  fi
+
   NODE_CMD="node -e \"
 const { chromium } = require('playwright');
 const api = require('./src/poi-searcher-api');
@@ -293,7 +319,7 @@ const api = require('./src/poi-searcher-api');
   // batchSearchPOIs throws 'Target page, context or browser has been closed'.
   // We catch it, relaunch a fresh browser, and resume — the resume logic
   // inside batchSearchPOIs will reload incrementalSaveFile + places.ndjson.
-  let browser = await chromium.launch({ headless: true });
+  let browser = await chromium.launch({ headless: true, args: ['--disk-cache-size=1'] });
   let result = null;
   const MAX_RESTARTS = 20;
   for (let attempt = 1; attempt <= MAX_RESTARTS; attempt++) {
@@ -306,6 +332,10 @@ const api = require('./src/poi-searcher-api');
         saveInterval: ${SAVE_INTERVAL},
         incrementalSaveFile: '${OUTPUT_FILE}',
         boundaryFile: '${BOUNDARY_FILE}',
+        selfAdapt: ${SELF_ADAPT},
+        saMaxQueries: ${SA_MAX_QUERIES},
+        saStopAfterDry: ${SA_STOP_DRY},
+        saVocabFile: ${SA_VOCAB_JS},
       });
       break;
     } catch (e) {
@@ -318,7 +348,7 @@ const api = require('./src/poi-searcher-api');
       }
       console.warn('[QUADTREE] browser died, restarting (attempt ' + attempt + '/' + MAX_RESTARTS + '): ' + msg.substring(0, 120));
       await new Promise(r => setTimeout(r, 5000));
-      browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({ headless: true, args: ['--disk-cache-size=1'] });
     }
   }
 
@@ -531,11 +561,23 @@ step_configure() {
     [ -n "$INPUT" ] && DELAY="$INPUT"
   fi
 
-  # Categories
-  local cat_count=$(python3 -c "import json; d=json.load(open('config/categories.json')); print(len(d.get('categories',d)))" 2>/dev/null || echo "?")
+  # Category mode: fixed taxonomy vs self-adapt (category-free) discovery
   echo ""
-  echo "Categories: $cat_count (from config/categories.json)"
-  read -p "Filter categories? (comma-separated, or Enter for all)> " CAT_FILTER
+  echo "Category mode:"
+  echo "  [1] Fixed taxonomy (config/categories.json)"
+  echo "  [2] Self-adapt — discover types from Google's own labels (category-free)"
+  read -p "Select [1]> " CAT_MODE
+  if [ "$CAT_MODE" = "2" ]; then
+    SELF_ADAPT=true
+    read -p "  Query budget per area (default: $SA_MAX_QUERIES)> " INPUT
+    [ -n "$INPUT" ] && SA_MAX_QUERIES="$INPUT"
+    read -p "  Stop after K consecutive dry (in-boundary) queries, 0=off (default: 6)> " INPUT
+    SA_STOP_DRY="${INPUT:-6}"
+  else
+    local cat_count=$(python3 -c "import json; d=json.load(open('config/categories.json')); print(len(d.get('categories',d)))" 2>/dev/null || echo "?")
+    echo "Categories: $cat_count (from config/categories.json)"
+    read -p "Filter categories? (comma-separated, or Enter for all)> " CAT_FILTER
+  fi
 
   # Output file (organized by city folder)
   local city_slug=$(echo "$CITY_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd 'a-z0-9_')

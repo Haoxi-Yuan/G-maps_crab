@@ -91,7 +91,8 @@ main_menu() {
   while true; do
     print_logo
     echo "  [1] Stage 1 — Download city boundary + sampling points (+ map PNG)"
-    echo "  [2] Stage 2 — POI search"
+    echo "  [2] Stage 2 — POI search (single city)"
+    echo "  [2b] Stage 2 — Multi-boundary batch (many areas, e.g. parks)"
     echo "  [3] Stage 3 — Review scrape"
     echo "  [4] Stage 4 — Build SQLite DB from ndjson sources"
     echo "  [5] Stage 5 — Image downloader (independent of stage 3)"
@@ -103,6 +104,7 @@ main_menu() {
     case "$CHOICE" in
       1) node src/cli/boundary-wizard.js ;;
       2) ./poi-search.sh ;;
+      2b|2B) ./multi-boundary.sh ;;
       3) ./review-scrape.sh ;;
       4) node src/cli/db-wizard.js ;;
       5) node src/cli/image-wizard.js ;;

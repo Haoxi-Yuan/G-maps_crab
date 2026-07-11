@@ -108,6 +108,16 @@ node src/multi-boundary-orchestrator.js \
 
 Every shard is resume-safe independently (per-area `_area_complete.json`).
 
+### Interactive access
+
+Both flows also surface `--self-adapt` in the interactive launcher (`bin/gmaps-crab`):
+
+- **[2] Stage 2 — POI search (single city)** → `poi-search.sh` now asks a *Category
+  mode* question (fixed taxonomy vs self-adapt) with budget/convergence prompts.
+- **[2b] Stage 2 — Multi-boundary batch** → `multi-boundary.sh`, a wizard for the
+  orchestrator: boundaries file, batch name, cell/buffer, category mode, and shard
+  count (launches N tmux shards with per-shard vocab when > 1).
+
 ## What the code touches
 
 - `src/poi-searcher-api.js`
