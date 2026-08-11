@@ -15,8 +15,12 @@
  * Each area gets its own directory pair, named like a normal city so every
  * existing tool (poi-search.sh, review-scrape.sh, status menu) sees it:
  *
- *   data/<batch>__<slug>/<batch>__<slug>_boundary.geojson|_points.json|...
- *   output/<batch>__<slug>/poi_search.json|places.ndjson|...
+ *   data/_batches/<batch>/<batch>__<slug>/<batch>__<slug>_boundary.geojson|_points.json|...
+ *   output/_batches/<batch>/<batch>__<slug>/poi_search.json|places.ndjson|...
+ *
+ * Areas live under _batches/<batch>/ so a 370-park batch doesn't bury the
+ * handful of city folders at the top level; --flat restores the old placement,
+ * and scripts/migrate-batch-layout.sh relocates dirs from older runs.
  *
  * Resume is two-level: areas with an _area_complete.json marker are skipped;
  * the in-progress area resumes via stage 2's own poi_search.json/places.ndjson
@@ -95,7 +99,7 @@ function isPolygonal(geom) {
  * A Feature that is itself a MultiPolygon stays ONE area (an area may
  * legitimately be disjoint, e.g. a district with islands).
  */
-function splitAreas(boundariesFile, batchName) {
+function splitAreas(boundariesFile, batchName, flatLayout = false) {
   const data = JSON.parse(fs.readFileSync(boundariesFile, 'utf8'));
   let features;
   if (data.type === 'FeatureCollection') features = data.features || [];
@@ -119,7 +123,11 @@ function splitAreas(boundariesFile, batchName) {
     }
     seenSlugs.add(slug);
     const dirSlug = `${sanitizeName(batchName)}__${slug}`;
-    areas.push({ index: i, name, slug, dirSlug, feature });
+    // relDir is the path under data/ and output/. Grouped layout keeps a batch's
+    // hundreds of areas inside _batches/<batch>/ instead of flooding the top
+    // level alongside city folders; --flat restores the original placement.
+    const relDir = flatLayout ? dirSlug : path.join('_batches', sanitizeName(batchName), dirSlug);
+    areas.push({ index: i, name, slug, dirSlug, relDir, feature });
   });
 
   if (skippedNonPolygonal > 0) {
@@ -136,7 +144,7 @@ function splitAreas(boundariesFile, batchName) {
 // ============================================
 
 async function prepareAreaStage1(area, opts) {
-  const dataDir = path.join(ROOT, 'data', area.dirSlug);
+  const dataDir = path.join(ROOT, 'data', area.relDir || area.dirSlug);
   fs.mkdirSync(dataDir, { recursive: true });
 
   const boundaryPath = path.join(dataDir, `${area.dirSlug}_boundary.geojson`);
@@ -221,7 +229,7 @@ async function prepareAreaStage1(area, opts) {
 // ============================================
 
 async function scrapeArea(area, stage1, categories, opts) {
-  const outDir = path.join(ROOT, 'output', area.dirSlug);
+  const outDir = path.join(ROOT, 'output', area.relDir || area.dirSlug);
   fs.mkdirSync(outDir, { recursive: true });
 
   const incrementalSaveFile = path.join(outDir, 'poi_search.json');
@@ -299,7 +307,7 @@ async function scrapeArea(area, stage1, categories, opts) {
 // ============================================
 
 async function main(opts) {
-  const areas = splitAreas(opts.boundariesFile, opts.batchName);
+  const areas = splitAreas(opts.boundariesFile, opts.batchName, opts.flatLayout);
   console.log(`[MULTI] ${areas.length} area(s) in ${opts.boundariesFile}:`);
 
   let selected = opts.areaFilter
@@ -323,7 +331,7 @@ async function main(opts) {
 
   for (const a of areas) {
     const mark = selected.includes(a) ? '*' : ' ';
-    console.log(`  ${mark} [${a.index + 1}] ${a.slug}  (${a.name})  -> data|output/${a.dirSlug}/`);
+    console.log(`  ${mark} [${a.index + 1}] ${a.slug}  (${a.name})  -> data|output/${a.relDir || a.dirSlug}/`);
   }
 
   if (opts.dryRun) {
@@ -419,6 +427,7 @@ function parseArgs(argv) {
     dryRun: false,
     fresh: false,
     shard: null,
+    flatLayout: false,
     selfAdapt: false,
     saVocabFile: null,
     saMaxQueries: 300,
@@ -445,6 +454,7 @@ function parseArgs(argv) {
       case '--dry-run': opts.dryRun = true; break;
       case '--fresh': opts.fresh = true; break;
       case '--shard': { const m = String(argv[++i]).match(/^(\d+)\/(\d+)$/); if (!m) throw new Error('--shard must be i/N, e.g. 1/6'); opts.shard = { i: parseInt(m[1], 10), n: parseInt(m[2], 10) }; break; }
+      case '--flat': opts.flatLayout = true; break;
       case '--self-adapt': opts.selfAdapt = true; break;
       case '--sa-vocab': opts.saVocabFile = argv[++i]; break;
       case '--sa-max-queries': opts.saMaxQueries = parseInt(argv[++i], 10); break;
@@ -478,6 +488,9 @@ Options:
   --sa-seeds a,b,c         Override the generic bootstrap seeds
   --sa-vocab <file>        Shared vocab file (default output/_selfadapt_vocab__<batch>.json)
   --areas slug1,slug2      Only run these areas (slugs from feature names)
+  --flat                   Put area dirs directly in data/ and output/ (legacy).
+                           Default groups them under _batches/<batch>/ so a batch's
+                           hundreds of areas don't flood the top level.
   --shard i/N              Run a disjoint 1/N slice of areas (round-robin). Launch
                            N processes (1/N..N/N), one per machine/IP, to shard a
                            batch. Give each its own --sa-vocab in self-adapt mode.
