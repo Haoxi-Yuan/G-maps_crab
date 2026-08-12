@@ -9,16 +9,19 @@ const fs = require('fs').promises;
 
 class BoundaryGenerator {
   constructor() {
-    // Ordered by observed health 2026-04. Main overpass-api.de cluster
-    // (incl. z.* and lz4.*) was returning 504 for `out geom` queries —
-    // keep it last as fallback.
+    // Mirror health shifts over time, so this order is only a starting guess:
+    // _queryOverpass promotes whichever mirror last answered. (A previously
+    // hardcoded 2026-04 order left overpass-api.de last while the two community
+    // mirrors ahead of it had stopped resolving entirely.)
     this.overpassUrls = [
+      'https://overpass-api.de/api/interpreter',
       'https://overpass.kumi.systems/api/interpreter',
       'https://overpass.private.coffee/api/interpreter',
-      'https://overpass-api.de/api/interpreter',
     ];
     this._lastQueryAt = 0;
     this._minGapMs = 1000;
+    this._lastGoodUrl = null;
+    this._rounds = 2;
   }
 
   /**
@@ -140,19 +143,30 @@ class BoundaryGenerator {
    */
   async _queryOverpass(query) {
     let lastErr = null;
-    for (const url of this.overpassUrls) {
-      const gap = this._minGapMs - (Date.now() - this._lastQueryAt);
-      if (gap > 0) await new Promise((r) => setTimeout(r, gap));
-      this._lastQueryAt = Date.now();
-      try {
-        return await this._queryOverpassOnce(query, url);
-      } catch (e) {
-        lastErr = e;
-        // Only failover on rate-limit / transient server errors.
-        const msg = String(e && e.message || '');
-        const transient = /status (429|502|503|504)|timeout|ECONN|ETIMEDOUT|ENOTFOUND/i.test(msg);
-        if (!transient) throw e;
+    for (let round = 0; round < this._rounds; round++) {
+      // Prefer the mirror that answered last; a single pass over a fixed order
+      // gives up too early when a heavy query 504s sporadically.
+      const urls = this._lastGoodUrl
+        ? [this._lastGoodUrl, ...this.overpassUrls.filter((u) => u !== this._lastGoodUrl)]
+        : this.overpassUrls.slice();
+      for (const url of urls) {
+        const gap = this._minGapMs - (Date.now() - this._lastQueryAt);
+        if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+        this._lastQueryAt = Date.now();
+        try {
+          const res = await this._queryOverpassOnce(query, url);
+          this._lastGoodUrl = url;
+          return res;
+        } catch (e) {
+          lastErr = e;
+          if (this._lastGoodUrl === url) this._lastGoodUrl = null;
+          // Only failover on rate-limit / transient server errors.
+          const msg = String(e && e.message || '');
+          const transient = /status (429|502|503|504)|timeout|ECONN|ETIMEDOUT|ENOTFOUND/i.test(msg);
+          if (!transient) throw e;
+        }
       }
+      if (round < this._rounds - 1) await new Promise((r) => setTimeout(r, 5000));
     }
     throw lastErr || new Error('All Overpass mirrors failed');
   }
