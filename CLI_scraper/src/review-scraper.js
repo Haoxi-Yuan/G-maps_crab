@@ -277,6 +277,7 @@ function supplementPlace(place, supplement, reviews) {
 async function scrapeReviews(inputFile, outputFile, opts = {}) {
   const maxReviews = opts.maxReviews || CONFIG.maxReviews;
   const logFile = outputFile.replace(/\.ndjson$/, '.log');
+  const liveStatusFile = opts.liveStatusFile || outputFile.replace(/\.ndjson$/, '.live.json');
 
   // Log rotation
   if (fs.existsSync(logFile)) {
@@ -289,6 +290,53 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   // Logging: write to stdout only — the launching shell pipes to `tee -a <logfile>`,
   // so writing to the file here would duplicate every line.
   const log = (msg) => { console.log(msg); };
+
+  // A single atomically replaced status object for lightweight remote UIs.
+  // It never accumulates reviews: only the current POI and latest review
+  // snippet are retained. Readers therefore never need to scan the growing
+  // NDJSON output to render live context.
+  let liveStatus = {
+    version: 1,
+    city: path.basename(path.dirname(outputFile)),
+    phase: 'starting',
+    updatedAt: new Date().toISOString(),
+  };
+  function writeLiveStatus(patch) {
+    liveStatus = { ...liveStatus, ...patch, updatedAt: new Date().toISOString() };
+    const tmp = liveStatusFile + '.tmp';
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(liveStatus));
+      fs.renameSync(tmp, liveStatusFile);
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch (_) {}
+    }
+  }
+  function liveReview(review) {
+    if (!review) return null;
+    const text = typeof review.review_text === 'string'
+      ? review.review_text.replace(/\s+/g, ' ').trim().slice(0, 320)
+      : null;
+    return {
+      rating: review.rating ?? null,
+      text,
+      reviewer: review.reviewer_name || null,
+      publishedAt: review.published_at || review.published_at_date || null,
+    };
+  }
+  function latestLiveReview(batch) {
+    if (!Array.isArray(batch) || batch.length === 0) return null;
+    for (let i = batch.length - 1; i >= 0; i--) {
+      if (batch[i] && batch[i].review_text) return batch[i];
+    }
+    return batch[batch.length - 1];
+  }
+  function liveReviewPatch(review) {
+    const next = liveReview(review);
+    if (next && next.text) return next;
+    return liveStatus.latestReview && liveStatus.latestReview.text
+      ? liveStatus.latestReview
+      : next;
+  }
 
   // Read input: index placeId + byte offset per line using streaming (no full-file load)
   const placeIndex = []; // [{pid, name, expected, byteStart, byteEnd}]
@@ -317,6 +365,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     });
   }
   log(`[REVIEWS] Indexed ${placeIndex.length} places from ${inputFile}`);
+  writeLiveStatus({ total: placeIndex.length, phase: 'ready' });
 
   // Helper: read a single place from file by byte offset (no full-file read)
   function readPlace(byteStart, byteEnd) {
@@ -425,6 +474,22 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
       try { place = readPlace(byteStart, byteEnd); } catch (e) { log('  SKIP: read error ' + e.message); continue; }
       if (!place) { log('  SKIP: could not read place data'); continue; }
       const biz = place.business || {};
+      const latitude = biz.latitude ?? biz.coordinates?.lat ?? null;
+      const longitude = biz.longitude ?? biz.coordinates?.lng ?? null;
+      writeLiveStatus({
+        phase: 'loading',
+        index: i + 1,
+        total: placeIndex.length,
+        placeId: pid,
+        name: biz.name || name || '?',
+        categories: Array.isArray(biz.categories) ? biz.categories.slice(0, 6) : [],
+        latitude,
+        longitude,
+        expectedReviews: expected,
+        fetchedReviews: 0,
+        latestReview: null,
+        message: null,
+      });
 
       // Restart browser periodically to prevent memory buildup (Chromium leaks ~2MB/context)
       if (processed > 0 && processed % 200 === 0) {
@@ -489,8 +554,10 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
         // Fetch reviews with incremental flush to prevent data loss
         log('  Fetching reviews...');
+        writeLiveStatus({ phase: 'reviews' });
         const partialFile = outputFile + '.partial.' + pid.replace(/[^a-z0-9]/gi, '_');
         let flushedCount = 0;
+        let lastLiveWrite = 0;
 
         const reviewResult = await fetchAllReviews(page, {
           maxReviews,
@@ -500,12 +567,30 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           onProgress: (count, total, msg) => {
             if (msg) log(`    ${msg}`);
             else log(`    progress: ${count}/${total}`);
+            writeLiveStatus({ phase: 'reviews', fetchedReviews: count, message: msg || null });
+          },
+          onPage: (latest, count) => {
+            const now = Date.now();
+            if (now - lastLiveWrite < 1000) return;
+            lastLiveWrite = now;
+            writeLiveStatus({
+              phase: 'reviews',
+              fetchedReviews: count,
+              latestReview: liveReviewPatch(latest),
+              message: null,
+            });
           },
           onFlush: (batch) => {
             // Write each batch of ~100 reviews to a partial file
             const lines = batch.map(r => JSON.stringify(r)).join('\n') + '\n';
             fs.appendFileSync(partialFile, lines);
             flushedCount += batch.length;
+            writeLiveStatus({
+              phase: 'reviews',
+              fetchedReviews: flushedCount,
+              latestReview: liveReviewPatch(latestLiveReview(batch)),
+              message: null,
+            });
           },
         });
 
@@ -529,6 +614,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         // POST against /MapsPhotoService.ListEntityPhotos — no UI nav.
         // Takes ~2-30s/place depending on how many categories Google created.
         if (photoSession.captured.sessionToken && previewData) {
+          writeLiveStatus({ phase: 'photos', fetchedReviews: fetched });
           try {
             const photoStart = Date.now();
             const photoResult = await fetchAllPhotoCategories(
@@ -549,12 +635,14 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         }
 
         fs.appendFileSync(outputFile, JSON.stringify(merged) + '\n');
+        writeLiveStatus({ phase: 'done', fetchedReviews: fetched, message: reviewResult.stopReason || null });
 
         totalReviews += fetched;
         processed++;
 
       } catch (err) {
         log(`  ERROR: ${err.message}`);
+        writeLiveStatus({ phase: 'error', message: String(err.message || err).slice(0, 240) });
 
         // Try to recover partial reviews from flush file
         let partialReviews = [];
@@ -595,6 +683,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   console.log(`\n=== Summary ===`);
   console.log(`Processed: ${processed}/${placeIndex.length} | Reviews: ${totalReviews} | Errors: ${totalErrors} | Time: ${elapsed}s`);
   console.log(`Output: ${outputFile}`);
+  writeLiveStatus({ phase: 'complete', message: null });
 
   // No auto-merge step here. Build the final dataset (SQLite DB, combined
   // ndjson, etc.) from this append-only reviews.ndjson + places.ndjson at
@@ -620,6 +709,7 @@ if (require.main === module) {
       case '--input': inputFile = args[++i]; break;
       case '--output': outputFile = args[++i]; break;
       case '--max-reviews': opts.maxReviews = parseInt(args[++i]); break;
+      case '--live-status': opts.liveStatusFile = args[++i]; break;
       case '--help':
         console.log(`
 Review Scraper
@@ -631,6 +721,7 @@ Options:
   --input <file>       Input places file (from POI search)
   --output <file>      Output file (default: reviews.ndjson in same dir)
   --max-reviews <n>    Max reviews per place (default: 50000)
+  --live-status <file>  Atomically replaced live status JSON (default: reviews.live.json)
 `);
         process.exit(0);
     }

@@ -22,6 +22,11 @@
 
 const REVIEW_RPC_ID = 'qv9Egd'; // MapsUgcPostService.ListUgcPosts
 
+// CAPTURE_RAW_PHOTOS=1 archives each review photo's full protobuf entry as
+// `_photo_raw` so we can locate a permanent photo id (the stored URL is a
+// signed grass-cs one that expires). Off by default: raw entries are large.
+const CAPTURE_RAW_PHOTOS = process.env.CAPTURE_RAW_PHOTOS === '1';
+
 /**
  * Parse Google's chunked batchexecute response and return the inner data
  * for our service. Format on the wire:
@@ -106,6 +111,7 @@ function bumpReqId(url, step = 100000) {
  * @param {number} [opts.delayMs=200] - Delay between API calls
  * @param {Function} [opts.onProgress] - Callback(count, total) for progress reporting
  * @param {Function} [opts.onFlush] - Callback(reviewsBatch) for incremental persistence
+ * @param {Function} [opts.onPage] - Callback(latestReview, count, total) for transient live status
  * @param {number} [opts.flushEvery=100] - Flush every N reviews
  * @returns {Promise<{reviews: Array, detectedCount: number|null, error: string|null}>}
  */
@@ -116,6 +122,7 @@ async function fetchAllReviews(page, opts = {}) {
     delayMs = 200,
     onProgress = null,
     onFlush = null,
+    onPage = null,
     flushEvery = 100,
   } = opts;
 
@@ -316,11 +323,18 @@ async function fetchAllReviews(page, opts = {}) {
         const toISO = (us) => us && us > 1e12 ? new Date(us / 1000).toISOString() : null;
 
         const photos = [];
+        const photoIds = [];
+        const rawPhotoEntries = [];
         const photoArray = contentInfo[2] || [];
         for (const photo of photoArray) {
           const url = photo?.[1]?.[6]?.[0];
           if (url && url.includes('googleusercontent') && !url.includes('/a-/') && !url.includes('/a/')) {
             photos.push(url);
+            // photo[0] is the permanent photo id (CIABIh…/CIHM0ogK…), same id
+            // space as ListEntityPhotos gallery entries — unlike the signed
+            // grass-cs URL above, it never expires and joins photo_categories.
+            photoIds.push(typeof photo?.[0] === 'string' ? photo[0] : null);
+            if (CAPTURE_RAW_PHOTOS) rawPhotoEntries.push(photo);
           }
         }
 
@@ -349,6 +363,8 @@ async function fetchAllReviews(page, opts = {}) {
           response_from_owner_ago: ownerResponseAgo,
           has_owner_response: hasOwnerResponse || undefined,
           review_images: photos.length > 0 ? photos : undefined,
+          review_image_ids: photos.length > 0 ? photoIds : undefined,
+          _photo_raw: CAPTURE_RAW_PHOTOS && rawPhotoEntries.length > 0 ? rawPhotoEntries : undefined,
           _source: 'api',
         });
       } catch (e) {
@@ -362,6 +378,13 @@ async function fetchAllReviews(page, opts = {}) {
       if (consecutiveEmpty >= 3) { stopReason = 'consecutive_duplicate_pages'; break; }
     } else {
       consecutiveEmpty = 0;
+      if (onPage) {
+        let latest = reviews[reviews.length - 1];
+        for (let i = reviews.length - 1; i >= reviewsBefore; i--) {
+          if (reviews[i] && reviews[i].review_text) { latest = reviews[i]; break; }
+        }
+        onPage(latest, reviews.length, effectiveMax);
+      }
     }
 
     pageNum++;
