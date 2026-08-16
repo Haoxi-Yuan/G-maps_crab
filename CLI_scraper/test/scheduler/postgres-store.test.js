@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   createPool,
@@ -9,6 +12,8 @@ const {
   PostgresScheduler,
 } = require('../../src/scheduler/postgres-store');
 const { childTiles, makeTaskKey, makeTileId, tileBounds } = require('../../src/scheduler/tile-id');
+const { createSchedulerServer } = require('../../src/scheduler-api');
+const { HttpSchedulerClient } = require('../../src/scheduler/http-client');
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -38,8 +43,25 @@ test('PostgreSQL queue claims with SKIP LOCKED and commits split atomically', { 
     assert.equal((await scheduler.seedWorkflow(seed)).insertedTasks, 1);
     assert.equal((await scheduler.seedWorkflow(seed)).insertedTasks, 0, 'deterministic key must make reseed idempotent');
 
+    assert.equal((await scheduler.getTimingPolicy(workflowId, 'poi_search')).meanMs, 1500);
+    await scheduler.recordRequestOutcome(workflowId, 'poi_search', {
+      success: true, structureComplete: true, placeCount: 2, elapsedMs: 400,
+    });
+    assert.equal((await scheduler.getTimingPolicy(workflowId, 'poi_search')).meanMs, 400);
+    await scheduler.recordRequestOutcome(workflowId, 'poi_search', {
+      success: false, structureComplete: false, placeCount: 0, elapsedMs: 60000,
+    });
+    assert.equal(
+      (await scheduler.getTimingPolicy(workflowId, 'poi_search')).meanMs,
+      400,
+      'a timeout must not inflate future thresholds',
+    );
+
+    await scheduler.registerWorker(workflowId, 'worker-a', 'poi_search');
     const claimed = await scheduler.claimTask(workflowId, 'worker-a', { leaseSeconds: 60 });
     assert.equal(claimed.tile_id, tileId);
+    assert.equal(await scheduler.markTaskProgress(claimed, 'test_request_complete'), true);
+    assert.equal(await scheduler.heartbeat(claimed, 60, 1000), true);
     const children = childTiles(tile).map((child) => ({
       ...child,
       taskKey: makeTaskKey('country', group, child.tileId),
@@ -57,6 +79,13 @@ test('PostgreSQL queue claims with SKIP LOCKED and commits split atomically', { 
       }],
     });
     assert.equal(committed.insertedChildren, 4);
+    assert.deepEqual(
+      await scheduler.commitOutcome(claimed, {
+        status: 'SPLIT', requestCount: 7, children, observations: [],
+      }),
+      committed,
+      'a repeated HTTP commit must return the durable first result',
+    );
     const progress = await scheduler.progress(workflowId);
     assert.equal(Number(progress[0].open_tasks), 4);
     assert.equal(Number(progress[0].split_tasks), 1);
@@ -64,7 +93,19 @@ test('PostgreSQL queue claims with SKIP LOCKED and commits split atomically', { 
     // Force the second child insert to violate the zoom constraint. The first
     // child insert and the observation UPSERT must roll back with it, leaving
     // the claimed parent intact and no orphan child/result rows.
+    await scheduler.registerWorker(workflowId, 'worker-b', 'poi_search');
     const childClaim = await scheduler.claimTask(workflowId, 'worker-b', { leaseSeconds: 60 });
+    await pool.query(
+      `UPDATE gmaps_scheduler.tasks SET last_progress_at = clock_timestamp() - interval '2 minutes'
+       WHERE workflow_id = $1 AND boundary_id = $2 AND category_group = $3 AND tile_id = $4`,
+      [workflowId, childClaim.boundary_id, childClaim.category_group, childClaim.tile_id],
+    );
+    assert.equal(
+      await scheduler.heartbeat(childClaim, 60, 1000),
+      false,
+      'heartbeats without recent completed-request progress must not renew a lease',
+    );
+    assert.equal(await scheduler.markTaskProgress(childClaim, 'test_resume'), true);
     const grandchildren = childTiles({
       x: childClaim.tile_x,
       y: childClaim.tile_y,
@@ -140,6 +181,45 @@ test('PostgreSQL queue claims with SKIP LOCKED and commits split atomically', { 
     assert.equal(budget1.granted, true);
     assert.equal(budget2.granted, true);
     assert.equal(budget3.granted, false);
+
+    // Finish every remaining task, then exercise the exact Atlas topology:
+    // authenticated HTTP queue read, streaming export, and strict completion.
+    while (true) {
+      const remaining = await scheduler.claimTask(workflowId, 'worker-final', { leaseSeconds: 60 });
+      if (!remaining) break;
+      await scheduler.commitOutcome(remaining, {
+        status: 'DONE', observations: [], requestCount: 1,
+      });
+    }
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(await scheduler.queueState(workflowId)).filter(([key]) => (
+        ['waiting', 'claimed', 'quarantined', 'suspectEmpty'].includes(key)
+      ))),
+      { waiting: 0, claimed: 0, quarantined: 0, suspectEmpty: 0 },
+    );
+
+    const token = 'postgres-integration-token-with-32-characters';
+    const server = createSchedulerServer(scheduler, { token });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const client = new HttpSchedulerClient(`http://127.0.0.1:${server.address().port}`, { token });
+    const output = fs.mkdtempSync(path.join(os.tmpdir(), 'gmaps-http-export-'));
+    try {
+      const places = await client.downloadExport(workflowId, 'places.ndjson', path.join(output, 'places.ndjson'));
+      const memberships = await client.downloadExport(
+        workflowId,
+        'place_boundaries.ndjson',
+        path.join(output, 'place_boundaries.ndjson'),
+      );
+      assert.equal(places.rows, 1);
+      assert.equal(memberships.rows, 1);
+      assert.equal((await client.markWorkflowComplete(workflowId, { places, memberships })).status, 'COMPLETE');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      fs.rmSync(output, { recursive: true, force: true });
+    }
   } finally {
     await pool.query('DELETE FROM gmaps_scheduler.workflows WHERE workflow_id = $1', [workflowId]).catch(() => {});
     await pool.end();

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   fetchCellPaginated,
+  fetchPage,
   searchCell,
   createBBox,
 } = require('../../src/poi-searcher-api');
@@ -57,4 +58,21 @@ test('a structurally complete empty response remains a valid empty page', async 
   assert.equal(result.paginationComplete, true);
   assert.equal(result.responseStructureComplete, true);
   assert.equal(result.newIds.length, 0);
+});
+
+test('a wedged page.evaluate is cut off by the mean-derived outer watchdog', async () => {
+  let closes = 0;
+  const page = {
+    evaluate: async () => new Promise(() => {}),
+    close: async () => { closes++; },
+  };
+  const started = Date.now();
+  const result = await fetchPage(
+    page, 'Restaurant', 1.3, 103.8, 100, pbTemplate, 0,
+    { requestTimeoutMs: 20 },
+  );
+  assert.equal(result.error, 'evaluate_stalled');
+  assert.ok(Date.now() - started < 250, 'watchdog should fail fast in the unit test');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(closes, 1);
 });

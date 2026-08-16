@@ -1,0 +1,26 @@
+#!/bin/bash
+#PBS -N sgp_rescue
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=48:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${AREAS_FILE:?qsub must provide AREAS_FILE}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+test -s "$SIF"
+test -d "$PROJECT/node_modules/playwright"
+
+export SINGULARITYENV_AREAS_FILE="$AREAS_FILE"
+export SINGULARITYENV_RESCUE_WORKERS="${RESCUE_WORKERS:-4}"
+export SINGULARITYENV_PBS_JOBID="${PBS_JOBID:-manual}"
+
+singularity exec -B /hpctmp:/hpctmp -B /tmp:/tmp "$SIF" \
+  "$PROJECT/scripts/hpc/atlas-legacy-rescue-runner.sh"

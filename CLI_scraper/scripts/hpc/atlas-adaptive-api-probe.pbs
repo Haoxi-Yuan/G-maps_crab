@@ -1,0 +1,43 @@
+#!/bin/bash
+#PBS -N gmaps_api_probe
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=00:05:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${WORKFLOW_ID:?WORKFLOW_ID is required}"
+: "${SCHEDULER_URL:?SCHEDULER_URL is required}"
+: "${SCHEDULER_API_TOKEN_FILE:?SCHEDULER_API_TOKEN_FILE is required}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+test -r "$SCHEDULER_API_TOKEN_FILE"
+export SINGULARITYENV_SCHEDULER_URL="$SCHEDULER_URL"
+export SINGULARITYENV_SCHEDULER_API_TOKEN_FILE="$SCHEDULER_API_TOKEN_FILE"
+export SINGULARITYENV_WORKFLOW_ID="$WORKFLOW_ID"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+
+singularity exec -B /hpctmp:/hpctmp -B /home:/home "$SIF" bash -lc "
+  set -Eeuo pipefail
+  cd '$PROJECT'
+  node - <<'NODE'
+const { HttpSchedulerClient } = require('./src/scheduler/http-client');
+(async () => {
+  const scheduler = new HttpSchedulerClient(process.env.SCHEDULER_URL, {
+    tokenFile: process.env.SCHEDULER_API_TOKEN_FILE,
+  });
+  const state = await scheduler.queueState(process.env.WORKFLOW_ID);
+  const timing = await scheduler.getTimingPolicy(process.env.WORKFLOW_ID, 'poi_search');
+  console.log(JSON.stringify({ event: 'scheduler_compute_preflight', state, timing }));
+})().catch((error) => {
+  console.error(error.stack || error);
+  process.exit(1);
+});
+NODE
+"

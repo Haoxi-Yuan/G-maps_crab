@@ -134,7 +134,7 @@ function pointsToBBox(points, paddingKm = 0.5) {
 // pb= template capture
 // ============================================
 
-async function capturePbTemplate(page, query, lat, lng) {
+async function capturePbTemplate(page, query, lat, lng, options = {}) {
   let capturedPb = null;
   const handler = (req) => {
     const url = req.url();
@@ -144,9 +144,15 @@ async function capturePbTemplate(page, query, lat, lng) {
     }
   };
   page.on('request', handler);
-  await page.goto(`https://www.google.com/maps/search/${encodeURIComponent(query)}/@${lat},${lng},14z`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(5000);
-  page.off('request', handler);
+  try {
+    await page.goto(`https://www.google.com/maps/search/${encodeURIComponent(query)}/@${lat},${lng},14z`, {
+      waitUntil: 'domcontentloaded',
+      timeout: options.navigationTimeoutMs ?? 30000,
+    });
+    await page.waitForTimeout(options.postNavigationWaitMs ?? 5000);
+  } finally {
+    page.off('request', handler);
+  }
   if (!capturedPb) throw new Error('Failed to capture pb= template');
   return capturedPb;
 }
@@ -175,8 +181,10 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
   // loop in fetchCellPaginated can decide what to do — and so a single
   // browser death doesn't crash the whole scrape.
   let result;
+  let evaluationWatchdog;
   try {
-    result = await page.evaluate(async ({ fetchUrl, timeoutMs }) => {
+    const requestTimeoutMs = options.requestTimeoutMs ?? CONFIG.requestTimeoutMs;
+    const evaluation = page.evaluate(async ({ fetchUrl, timeoutMs }) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -409,13 +417,31 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
     } finally {
       clearTimeout(timeout);
     }
-    }, { fetchUrl: url, timeoutMs: options.requestTimeoutMs ?? CONFIG.requestTimeoutMs });
+    }, { fetchUrl: url, timeoutMs: requestTimeoutMs });
+    const outerTimeoutMs = Math.ceil(requestTimeoutMs * 1.25);
+    const watchdog = new Promise((_, reject) => {
+      evaluationWatchdog = setTimeout(() => {
+        const error = new Error(`page.evaluate made no progress for ${outerTimeoutMs}ms`);
+        error.code = 'EVALUATION_STALLED';
+        reject(error);
+      }, outerTimeoutMs);
+    });
+    result = await Promise.race([evaluation, watchdog]);
   } catch (e) {
+    if (e && e.code === 'EVALUATION_STALLED') {
+      // A renderer can be wedged so deeply that its in-page AbortController
+      // never fires. Close the page asynchronously so the owning worker can
+      // restart the session; never let one tile hold a process indefinitely.
+      page.close().catch(() => {});
+      return { error: 'evaluate_stalled', structureComplete: false, places: [] };
+    }
     const msg = String(e && e.message || '');
     if (/Target page, context or browser has been closed|Browser has been closed|Execution context was destroyed|page has been closed/i.test(msg)) {
       return { error: 'browser_closed', structureComplete: false, places: [] };
     }
     return { error: 'evaluate_failed:' + msg.substring(0, 80), structureComplete: false, places: [] };
+  } finally {
+    clearTimeout(evaluationWatchdog);
   }
   return result;
 }

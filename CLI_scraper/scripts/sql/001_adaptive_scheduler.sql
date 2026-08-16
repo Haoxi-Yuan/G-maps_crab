@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS gmaps_scheduler.tasks (
   lease_owner text,
   lease_token text,
   lease_expires_at timestamptz,
+  last_progress_at timestamptz,
+  last_commit_token text,
+  last_commit_result jsonb,
   request_count integer NOT NULL DEFAULT 0 CHECK (request_count >= 0),
   result_place_count integer NOT NULL DEFAULT 0 CHECK (result_place_count >= 0),
   error_code text,
@@ -92,6 +95,13 @@ CREATE TABLE IF NOT EXISTS gmaps_scheduler.tasks (
   FOREIGN KEY (workflow_id, category_group)
     REFERENCES gmaps_scheduler.category_groups(workflow_id, category_group) ON DELETE CASCADE
 );
+
+ALTER TABLE gmaps_scheduler.tasks
+  ADD COLUMN IF NOT EXISTS last_progress_at timestamptz;
+ALTER TABLE gmaps_scheduler.tasks
+  ADD COLUMN IF NOT EXISTS last_commit_token text;
+ALTER TABLE gmaps_scheduler.tasks
+  ADD COLUMN IF NOT EXISTS last_commit_result jsonb;
 
 CREATE INDEX IF NOT EXISTS tasks_claim_idx
   ON gmaps_scheduler.tasks (workflow_id, boundary_id, priority DESC, next_attempt_at, created_at)
@@ -134,12 +144,19 @@ CREATE TABLE IF NOT EXISTS gmaps_scheduler.worker_sessions (
   endpoint text NOT NULL,
   started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   heartbeat_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  last_progress_at timestamptz,
+  last_progress_kind text,
   last_probe_at timestamptz,
   last_probe_ok_at timestamptz,
   last_probe_error text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   PRIMARY KEY (workflow_id, worker_id, endpoint)
 );
+
+ALTER TABLE gmaps_scheduler.worker_sessions
+  ADD COLUMN IF NOT EXISTS last_progress_at timestamptz;
+ALTER TABLE gmaps_scheduler.worker_sessions
+  ADD COLUMN IF NOT EXISTS last_progress_kind text;
 
 CREATE TABLE IF NOT EXISTS gmaps_scheduler.request_budgets (
   workflow_id text NOT NULL REFERENCES gmaps_scheduler.workflows(workflow_id) ON DELETE CASCADE,
@@ -160,7 +177,24 @@ CREATE TABLE IF NOT EXISTS gmaps_scheduler.health_buckets (
   structurally_complete_count bigint NOT NULL DEFAULT 0,
   nonempty_count bigint NOT NULL DEFAULT 0,
   place_count bigint NOT NULL DEFAULT 0,
+  latency_sum_ms bigint NOT NULL DEFAULT 0,
+  latency_samples bigint NOT NULL DEFAULT 0,
   PRIMARY KEY (workflow_id, endpoint, bucket_start)
+);
+
+ALTER TABLE gmaps_scheduler.health_buckets
+  ADD COLUMN IF NOT EXISTS latency_sum_ms bigint NOT NULL DEFAULT 0;
+ALTER TABLE gmaps_scheduler.health_buckets
+  ADD COLUMN IF NOT EXISTS latency_samples bigint NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS gmaps_scheduler.operation_latency (
+  workflow_id text NOT NULL REFERENCES gmaps_scheduler.workflows(workflow_id) ON DELETE CASCADE,
+  operation text NOT NULL,
+  ewma_ms numeric NOT NULL CHECK (ewma_ms BETWEEN 50 AND 60000),
+  sample_count bigint NOT NULL DEFAULT 0 CHECK (sample_count >= 0),
+  last_sample_ms integer NOT NULL CHECK (last_sample_ms BETWEEN 0 AND 600000),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (workflow_id, operation)
 );
 
 CREATE TABLE IF NOT EXISTS gmaps_scheduler.task_events (

@@ -488,20 +488,31 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
     WHERE sha = ?
   `);
   let requestRecorded = false;
+  let requestTiming = null;
+  let requestStarted = null;
   try {
     if (GLOBAL_IMAGE_LIMITER) {
-      try { await GLOBAL_IMAGE_LIMITER.beforeRequest(); }
+      try { requestTiming = await GLOBAL_IMAGE_LIMITER.beforeRequest(); }
       catch (error) {
         error.schedulerBudgetUnavailable = true;
         throw error;
       }
     }
-    const { buf, mime } = await fetchBuffer(blob.url_full);
+    requestStarted = Date.now();
+    const { buf, mime } = await fetchBuffer(
+      blob.url_full,
+      (requestTiming && requestTiming.requestTimeoutMs) || 20000,
+    );
     if (!buf || buf.length < 1024) {
       throw new Error(`payload too small (${buf?.length || 0} bytes)`);
     }
     if (GLOBAL_IMAGE_LIMITER) {
-      await GLOBAL_IMAGE_LIMITER.onResult({ success: true, structureComplete: true, placeCount: 1 });
+      await GLOBAL_IMAGE_LIMITER.onResult({
+        success: true,
+        structureComplete: true,
+        placeCount: 1,
+        elapsedMs: Date.now() - requestStarted,
+      });
       requestRecorded = true;
     }
     const finalAbs = await writeBlobAtomically(blobsRoot, blob.sha, buf);
@@ -528,7 +539,12 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
     // the blob's retry counter. Leave it pending for the next worker pass.
     if (e.schedulerBudgetUnavailable) throw e;
     if (GLOBAL_IMAGE_LIMITER && !requestRecorded) {
-      await GLOBAL_IMAGE_LIMITER.onResult({ success: false, structureComplete: false, placeCount: 0 }).catch(() => {});
+      await GLOBAL_IMAGE_LIMITER.onResult({
+        success: false,
+        structureComplete: false,
+        placeCount: 0,
+        elapsedMs: requestStarted ? Date.now() - requestStarted : 0,
+      }).catch(() => {});
     }
     const attempts = (blob.attempts || 0) + 1;
     const dead = attempts >= task.max_retries;
@@ -767,16 +783,20 @@ async function main() {
   }
 
   const schedulerWorkflow = args['scheduler-workflow'] || process.env.GMAPS_SCHEDULER_WORKFLOW || null;
-  let schedulerPool = null;
+  let closeScheduler = async () => {};
   if (schedulerWorkflow) {
-    const { createPool, PostgresScheduler } = require('./scheduler/postgres-store');
-    schedulerPool = createPool(process.env.DATABASE_URL, {
+    const { createSchedulerBackend } = require('./scheduler/backend');
+    const backend = createSchedulerBackend({
       applicationName: `gmaps-images:${schedulerWorkflow}:${process.pid}`,
       max: 3,
     });
-    const scheduler = new PostgresScheduler(schedulerPool);
+    const scheduler = backend.scheduler;
+    closeScheduler = backend.close;
     const workerId = `${require('os').hostname()}:${process.pid}:images`;
-    await scheduler.registerWorker(schedulerWorkflow, workerId, 'images', { taskId });
+    await scheduler.registerWorker(schedulerWorkflow, workerId, 'images', {
+      taskId,
+      schedulerTransport: backend.transport,
+    });
     GLOBAL_IMAGE_LIMITER = {
       beforeRequest: () => scheduler.waitForBudget(schedulerWorkflow, 'images'),
       onResult: (result) => scheduler.recordRequestOutcome(schedulerWorkflow, 'images', result),
@@ -834,7 +854,7 @@ async function main() {
   } finally {
     clearInterval(progT);
     db.close();
-    if (schedulerPool) await schedulerPool.end().catch(() => {});
+    await closeScheduler().catch(() => {});
   }
   console.log(`[task ${taskId}] exit`);
 }

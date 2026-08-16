@@ -4,7 +4,7 @@ set -Eeuo pipefail
 BASE=/hpctmp/haoxi.yuan/gmaps_atlas
 PROJECT="$BASE/CLI_scraper"
 WORKFLOW_ID="${WORKFLOW_ID:?WORKFLOW_ID is required}"
-WORKERS_PER_JOB="${WORKERS_PER_JOB:-12}"
+WORKERS_PER_JOB="${WORKERS_PER_JOB:-6}"
 JOB_ID="${PBS_JOBID:-manual}"
 LOG_DIR="$BASE/logs/adaptive/$WORKFLOW_ID"
 
@@ -13,6 +13,8 @@ export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 export TMPDIR="/tmp/haoxi.yuan-adaptive-${JOB_ID}"
 export XDG_CACHE_HOME="$TMPDIR/xdg-cache"
 export NODE_OPTIONS=--max-old-space-size=2048
+export GMAPS_BROWSER_LAUNCH_SLOTS="${GMAPS_BROWSER_LAUNCH_SLOTS:-2}"
+export GMAPS_NODE_LAUNCH_GATE="/tmp/haoxi.yuan-gmaps-browser-launch-gate"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$LOG_DIR"
 
 pids=()

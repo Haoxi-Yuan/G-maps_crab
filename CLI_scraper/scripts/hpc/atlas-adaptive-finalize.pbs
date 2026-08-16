@@ -8,15 +8,17 @@
 set -Eeuo pipefail
 
 : "${WORKFLOW_ID:?WORKFLOW_ID is required}"
-: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}"
+: "${SCHEDULER_URL:?SCHEDULER_URL is required}"
+: "${SCHEDULER_API_TOKEN_FILE:?SCHEDULER_API_TOKEN_FILE is required}"
 : "${FINAL_OUTPUT:?FINAL_OUTPUT is required}"
 
 BASE=/hpctmp/haoxi.yuan/gmaps_atlas
 PROJECT="$BASE/CLI_scraper"
 SIF="$BASE/images/playwright-1.57.0-noble.sif"
 
-test -r "$DATABASE_URL_FILE"
-export SINGULARITYENV_DATABASE_URL="$(<"$DATABASE_URL_FILE")"
+test -r "$SCHEDULER_API_TOKEN_FILE"
+export SINGULARITYENV_SCHEDULER_URL="$SCHEDULER_URL"
+export SINGULARITYENV_SCHEDULER_API_TOKEN_FILE="$SCHEDULER_API_TOKEN_FILE"
 
 module load singularity/3.8.3
 unset LD_PRELOAD

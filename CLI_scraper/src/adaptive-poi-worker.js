@@ -2,6 +2,7 @@
 'use strict';
 
 const os = require('os');
+const path = require('path');
 
 const { chromium } = require('playwright');
 const stealth = require('./stealth');
@@ -20,6 +21,8 @@ const {
 } = require('./scheduler/tile-id');
 const { classifyTileOutcome } = require('./scheduler/outcome');
 const { createPool, PostgresScheduler } = require('./scheduler/postgres-store');
+const { HttpSchedulerClient } = require('./scheduler/http-client');
+const { acquireLaunchSlot } = require('./scheduler/node-launch-gate');
 
 const PAGE_SIZE = 20;
 
@@ -48,16 +51,20 @@ function parseArgs(argv) {
     workerId: `${os.hostname()}:${process.pid}`,
     maxPages: 7,
     maxPageRetries: 2,
-    retryDelayMs: 5000,
-    requestTimeoutMs: 45000,
-    leaseSeconds: 300,
-    heartbeatSeconds: 60,
-    probeFreshSeconds: 300,
+    retryDelayMs: null,
+    requestTimeoutMs: null,
+    leaseSeconds: null,
+    heartbeatSeconds: null,
+    probeFreshSeconds: null,
     probeQuery: 'restaurant',
     probeLat: 1.2834,
     probeLng: 103.8607,
     maxTileZoom: 20,
-    idlePollMs: 5000,
+    idlePollMs: null,
+    launchSlots: Number(process.env.GMAPS_BROWSER_LAUNCH_SLOTS || 2),
+    maxBrowserLaunchAttempts: 4,
+    launchGate: process.env.GMAPS_NODE_LAUNCH_GATE
+      || path.join('/tmp', `${process.env.USER || 'gmaps'}-browser-launch-gate`),
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -75,16 +82,21 @@ function parseArgs(argv) {
     else if (arg === '--probe-lng') opts.probeLng = Number(argv[++i]);
     else if (arg === '--max-tile-zoom') opts.maxTileZoom = Number(argv[++i]);
     else if (arg === '--idle-poll-ms') opts.idlePollMs = Number(argv[++i]);
+    else if (arg === '--launch-slots') opts.launchSlots = Number(argv[++i]);
+    else if (arg === '--max-browser-launch-attempts') opts.maxBrowserLaunchAttempts = Number(argv[++i]);
+    else if (arg === '--launch-gate') opts.launchGate = argv[++i];
     else if (arg === '--help') {
       console.log(`
 PostgreSQL adaptive POI worker
 
 Usage:
-  DATABASE_URL=postgres://... node src/adaptive-poi-worker.js --workflow <id> [options]
+  SCHEDULER_URL=https://... SCHEDULER_API_TOKEN_FILE=... \
+    node src/adaptive-poi-worker.js --workflow <id> [options]
 
 Important defaults:
-  3 attempts per HTTP page (--max-page-retries 2), 45s fetch timeout,
-  5m task lease, 5m known-nonempty probe freshness, Web Mercator zoom 20 floor.
+  3 attempts per HTTP page (--max-page-retries 2), Web Mercator zoom 20 floor.
+  Request, retry, heartbeat, lease and stall thresholds are short capped values
+  derived from the successful-response EWMA. Explicit time flags override them.
 `);
       process.exit(0);
     } else throw new Error(`unknown argument: ${arg}`);
@@ -93,37 +105,90 @@ Important defaults:
   return opts;
 }
 
-async function createBrowserSession(opts) {
-  const browser = await chromium.launch({
-    headless: true,
-    args: [...stealth.buildLaunchArgs(), '--disk-cache-size=1'],
+async function createBrowserSession(scheduler, opts) {
+  const launchPolicy = await scheduler.getTimingPolicy(opts.workflowId, 'browser_launch');
+  const launchTimeoutMs = opts.requestTimeoutMs || launchPolicy.requestTimeoutMs;
+  const gate = await acquireLaunchSlot(opts.launchGate, {
+    slots: opts.launchSlots,
+    timeoutMs: launchTimeoutMs,
+    staleMs: launchTimeoutMs * 2,
+    pollMs: Math.max(100, Math.min(1000, Math.round(launchPolicy.meanMs / 10))),
   });
+  let browser;
   try {
+    const launchStarted = Date.now();
+    browser = await chromium.launch({
+      headless: true,
+      timeout: launchTimeoutMs,
+      args: [...stealth.buildLaunchArgs(), '--disk-cache-size=1'],
+    });
+    await scheduler.recordOperationLatency(opts.workflowId, 'browser_launch', Date.now() - launchStarted);
     const { context, page } = await stealth.createStealthContext(browser, { blockImages: true });
-    const pbTemplate = await capturePbTemplate(page, opts.probeQuery, opts.probeLat, opts.probeLng);
-    return { browser, context, page, pbTemplate };
+    const navigationPolicy = await scheduler.getTimingPolicy(opts.workflowId, 'page_navigation');
+    const navigationTimeoutMs = opts.requestTimeoutMs || navigationPolicy.requestTimeoutMs;
+    const navigationStarted = Date.now();
+    const pbTemplate = await capturePbTemplate(page, opts.probeQuery, opts.probeLat, opts.probeLng, {
+      navigationTimeoutMs,
+      postNavigationWaitMs: Math.max(1000, Math.min(5000, navigationPolicy.meanMs)),
+    });
+    await scheduler.recordOperationLatency(opts.workflowId, 'page_navigation', Date.now() - navigationStarted);
+    return {
+      browser,
+      context,
+      page,
+      pbTemplate,
+      closeTimeoutMs: Math.max(500, Math.min(5000, navigationPolicy.heartbeatMs)),
+    };
   } catch (error) {
-    await browser.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
     throw error;
+  } finally {
+    // Keep the slot through the first Maps navigation as well as process
+    // creation. This prevents a node-wide cold-start and socket stampede.
+    gate.release();
   }
 }
 
 async function closeSession(session) {
   if (!session) return;
-  try { await session.page.close(); } catch (_) {}
-  try { await session.context.close(); } catch (_) {}
-  try { await session.browser.close(); } catch (_) {}
+  const bounded = async (promise) => {
+    let timer;
+    try {
+      await Promise.race([
+        promise,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, session.closeTimeoutMs || 1000);
+          timer.unref();
+        }),
+      ]);
+    } catch (_) {
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  try { await bounded(session.page.close()); } catch (_) {}
+  try { await bounded(session.context.close()); } catch (_) {}
+  try { await bounded(session.browser.close()); } catch (_) {}
 }
 
-async function fetchWithBudget({ scheduler, workflowId, page, args }) {
-  await scheduler.waitForBudget(workflowId, 'poi_search');
-  const result = await fetchPage(page, ...args);
-  await scheduler.recordRequestOutcome(workflowId, 'poi_search', {
+async function fetchWithBudget({ scheduler, workflowId, page, args, task, opts }) {
+  const timing = await scheduler.waitForBudget(workflowId, 'poi_search');
+  const fetchArgs = [...args];
+  fetchArgs.push({ requestTimeoutMs: opts.requestTimeoutMs || timing.requestTimeoutMs });
+  const started = Date.now();
+  const result = await fetchPage(page, ...fetchArgs);
+  const nextTiming = await scheduler.recordRequestOutcome(workflowId, 'poi_search', {
     success: !result.error,
     structureComplete: result.structureComplete === true,
     placeCount: result.places ? result.places.length : 0,
+    elapsedMs: Date.now() - started,
   });
-  return result;
+  if (task) {
+    const accepted = await scheduler.markTaskProgress(task, 'request_complete');
+    if (!accepted) throw new Error(`task lease lost while recording progress: ${task.task_key}`);
+    if (opts.onProgress) opts.onProgress('request_complete');
+  }
+  return { ...result, timingPolicy: nextTiming || timing };
 }
 
 async function ensureHealthyProbe(scheduler, session, opts) {
@@ -137,8 +202,8 @@ async function ensureHealthyProbe(scheduler, session, opts) {
       page: session.page,
       args: [
         opts.probeQuery, opts.probeLat, opts.probeLng, altitude, session.pbTemplate, 0,
-        { requestTimeoutMs: opts.requestTimeoutMs },
       ],
+      opts,
     });
   } catch (error) {
     await scheduler.recordProbe(opts.workflowId, opts.workerId, 'poi_search', false, String(error.message || error));
@@ -177,12 +242,18 @@ async function fetchQuery(task, query, scheduler, session, opts) {
         page: session.page,
         args: [
           query, bbox.centerLat, bbox.centerLng, altitude, session.pbTemplate, offset,
-          { requestTimeoutMs: opts.requestTimeoutMs },
         ],
+        task,
+        opts,
       });
       if (!result.error) break;
       responseStructureComplete = false;
-      if (attempt < opts.maxPageRetries) await sleep(opts.retryDelayMs);
+      if (attempt < opts.maxPageRetries) {
+        const retryTiming = await scheduler.getTimingPolicy(opts.workflowId, 'poi_search', {
+          attempt: attempt + 1,
+        });
+        await sleep(opts.retryDelayMs || retryTiming.retryDelayMs);
+      }
     }
     if (result.error) {
       return {
@@ -291,7 +362,10 @@ async function processTask(task, scheduler, session, opts) {
     responseStructureComplete,
     teamProductionNormal: teamHealth.normal,
   });
-  const retryDelayMs = Math.min(15 * 60 * 1000, 30000 * 2 ** Math.max(0, task.attempt_count - 1));
+  const retryTiming = await scheduler.getTimingPolicy(opts.workflowId, 'poi_search', {
+    attempt: task.attempt_count,
+  });
+  const retryDelayMs = opts.retryDelayMs || retryTiming.retryDelayMs;
   const children = classification.status === 'SPLIT' ? buildChildren(task, opts) : [];
 
   return {
@@ -302,6 +376,7 @@ async function processTask(task, scheduler, session, opts) {
     errorMessage: error ? String(error) : null,
     retryDelayMs,
     children,
+    restartSession: Boolean(error && /browser_closed|page has been closed|context.*closed/i.test(String(error))),
     diagnostics: {
       reason: classification.reason,
       ...classification.diagnostics,
@@ -313,13 +388,50 @@ async function processTask(task, scheduler, session, opts) {
   };
 }
 
-async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+function createSchedulerBackend(opts) {
+  if (process.env.SCHEDULER_URL) {
+    const scheduler = new HttpSchedulerClient(process.env.SCHEDULER_URL, {
+      tokenFile: process.env.SCHEDULER_API_TOKEN_FILE,
+    });
+    return { scheduler, remote: true, close: () => scheduler.end() };
+  }
   const pool = createPool(process.env.DATABASE_URL, {
     applicationName: `gmaps-worker:${opts.workflowId}:${opts.workerId}`,
     max: 4,
   });
-  const scheduler = new PostgresScheduler(pool);
+  return {
+    scheduler: new PostgresScheduler(pool),
+    remote: false,
+    close: () => pool.end(),
+  };
+}
+
+async function openBrowserWithRetry(scheduler, opts, shouldStop) {
+  let attempt = 1;
+  let lastError;
+  while (!shouldStop() && attempt <= opts.maxBrowserLaunchAttempts) {
+    try {
+      return await createBrowserSession(scheduler, opts);
+    } catch (error) {
+      lastError = error;
+      const timing = await scheduler.getTimingPolicy(opts.workflowId, 'browser_launch', { attempt });
+      const retryDelayMs = opts.retryDelayMs || timing.retryDelayMs;
+      console.error(`[WORKER] browser startup attempt ${attempt} failed: ${error.message}; retry in ${retryDelayMs}ms`);
+      if (attempt >= opts.maxBrowserLaunchAttempts) break;
+      await sleep(retryDelayMs);
+      attempt++;
+    }
+  }
+  if (lastError && !shouldStop()) {
+    throw new Error(`browser failed to start after ${opts.maxBrowserLaunchAttempts} attempts: ${lastError.message}`);
+  }
+  return null;
+}
+
+async function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const backend = createSchedulerBackend(opts);
+  const { scheduler } = backend;
   let session = null;
   let stopping = false;
   let lastReap = 0;
@@ -331,18 +443,24 @@ async function main() {
       pid: process.pid,
       hostname: os.hostname(),
       node: process.version,
+      schedulerTransport: backend.remote ? 'https' : 'postgres',
     });
-    session = await createBrowserSession(opts);
+    session = await openBrowserWithRetry(scheduler, opts, () => stopping);
 
     while (!stopping) {
-      if (Date.now() - lastReap > 60000) {
+      const loopTiming = await scheduler.getTimingPolicy(opts.workflowId, 'poi_search');
+      if (!backend.remote && Date.now() - lastReap > loopTiming.reapIntervalMs) {
         await scheduler.reapExpiredLeases(opts.workflowId);
         lastReap = Date.now();
       }
-      await ensureHealthyProbe(scheduler, session, opts);
+      const probeOk = await ensureHealthyProbe(scheduler, session, opts);
+      if (!probeOk && session.page.isClosed()) {
+        await closeSession(session);
+        session = await openBrowserWithRetry(scheduler, opts, () => stopping);
+        continue;
+      }
       const task = await scheduler.claimTask(opts.workflowId, opts.workerId, {
         leaseSeconds: opts.leaseSeconds,
-        starvationSeconds: 60,
         tailThreshold: 0.95,
       });
       if (!task) {
@@ -351,7 +469,7 @@ async function main() {
           console.log(JSON.stringify({ event: 'queue_terminal', ...state }));
           break;
         }
-        await sleep(opts.idlePollMs);
+        await sleep(opts.idlePollMs || loopTiming.idlePollMs);
         continue;
       }
 
@@ -360,25 +478,74 @@ async function main() {
         taskKey: task.task_key,
         attempt: task.attempt_count,
         boundaryCompletion: task.completion_ratio,
+        timing: task.timing_policy,
       }));
-      const heartbeat = setInterval(() => {
-        Promise.all([
-          scheduler.heartbeat(task, opts.leaseSeconds),
-          scheduler.registerWorker(opts.workflowId, opts.workerId, 'poi_search', {
+      const taskTiming = task.timing_policy || loopTiming;
+      const leaseSeconds = opts.leaseSeconds || task.lease_seconds || Math.ceil(taskTiming.leaseMs / 1000);
+      const heartbeatMs = opts.heartbeatSeconds
+        ? opts.heartbeatSeconds * 1000
+        : taskTiming.heartbeatMs;
+      const progressTimeoutMs = taskTiming.progressTimeoutMs;
+      const taskSession = session;
+      const progressState = {
+        lastAt: Date.now(),
+        lastHeartbeatOkAt: Date.now(),
+        error: null,
+        checking: false,
+      };
+      const taskOpts = {
+        ...opts,
+        onProgress(kind) {
+          progressState.lastAt = Date.now();
+          console.log(JSON.stringify({ event: 'task_progress', taskKey: task.task_key, kind }));
+        },
+      };
+      const heartbeat = setInterval(async () => {
+        if (progressState.checking || progressState.error) return;
+        progressState.checking = true;
+        try {
+          const idleMs = Date.now() - progressState.lastAt;
+          if (idleMs > progressTimeoutMs) {
+            progressState.error = new Error(`task made no completed-request progress for ${idleMs}ms`);
+            console.error(`[WORKER] watchdog ${task.task_key}: ${progressState.error.message}`);
+            await closeSession(taskSession);
+            return;
+          }
+          const alive = await scheduler.heartbeat(task, leaseSeconds, progressTimeoutMs);
+          if (!alive) {
+            progressState.error = new Error('task lease was not renewed because durable progress is stale or lease was lost');
+            console.error(`[WORKER] heartbeat ${task.task_key}: ${progressState.error.message}`);
+            await closeSession(taskSession);
+            return;
+          }
+          progressState.lastHeartbeatOkAt = Date.now();
+          await scheduler.registerWorker(opts.workflowId, opts.workerId, 'poi_search', {
             pid: process.pid,
             hostname: os.hostname(),
             taskKey: task.task_key,
-          }),
-        ]).catch((error) => {
+            lastProgressAt: new Date(progressState.lastAt).toISOString(),
+          });
+        } catch (error) {
           console.error(`[WORKER] heartbeat failed ${task.task_key}: ${error.message}`);
-        });
-      }, opts.heartbeatSeconds * 1000);
+          if (Date.now() - progressState.lastHeartbeatOkAt > progressTimeoutMs) {
+            progressState.error = new Error(`scheduler heartbeat unavailable for ${progressTimeoutMs}ms`);
+            await closeSession(taskSession);
+          }
+        } finally {
+          progressState.checking = false;
+        }
+      }, heartbeatMs);
       heartbeat.unref();
 
       try {
-        const outcome = await processTask(task, scheduler, session, opts);
+        const outcome = await processTask(task, scheduler, session, taskOpts);
+        if (progressState.error) throw progressState.error;
         const committed = await scheduler.commitOutcome(task, outcome);
         console.log(JSON.stringify({ event: 'task_committed', taskKey: task.task_key, ...committed }));
+        if (outcome.restartSession && !stopping) {
+          await closeSession(session);
+          session = await openBrowserWithRetry(scheduler, opts, () => stopping);
+        }
       } catch (error) {
         console.error(`[WORKER] ${task.task_key}: ${error.stack || error}`);
         try {
@@ -388,8 +555,12 @@ async function main() {
             requestCount: 0,
             errorCode: 'worker_exception',
             errorMessage: String(error.message || error).slice(0, 2000),
-            retryDelayMs: Math.min(15 * 60 * 1000, 30000 * 2 ** Math.max(0, task.attempt_count - 1)),
-            diagnostics: { workerException: true },
+            retryDelayMs: opts.retryDelayMs || taskTiming.retryDelayMs,
+            diagnostics: {
+              workerException: true,
+              progressWatchdog: Boolean(progressState.error),
+              timing: taskTiming,
+            },
           });
           console.log(JSON.stringify({ event: 'task_exception_committed', taskKey: task.task_key, ...committed }));
         } catch (commitError) {
@@ -397,14 +568,14 @@ async function main() {
         }
         await closeSession(session);
         session = null;
-        if (!stopping) session = await createBrowserSession(opts);
+        if (!stopping) session = await openBrowserWithRetry(scheduler, opts, () => stopping);
       } finally {
         clearInterval(heartbeat);
       }
     }
   } finally {
     await closeSession(session);
-    await pool.end();
+    await backend.close();
   }
 }
 
@@ -420,4 +591,6 @@ module.exports = {
   fetchQuery,
   buildChildren,
   processTask,
+  createSchedulerBackend,
+  openBrowserWithRetry,
 };

@@ -126,15 +126,17 @@ async function fetchAllReviews(page, opts = {}) {
     flushEvery = 100,
     beforeRequest = null,
     onRequestResult = null,
-    requestTimeoutMs = 45000,
+    requestTimeoutMs = null,
   } = opts;
 
   async function replayRequest(url, body, headers) {
-    if (beforeRequest) await beforeRequest();
+    let timing = beforeRequest ? await beforeRequest() : null;
+    const effectiveTimeoutMs = requestTimeoutMs || (timing && timing.requestTimeoutMs) || 30000;
     const started = Date.now();
     let result;
+    let evaluationWatchdog;
     try {
-      result = await page.evaluate(async ({ url: fetchUrl, body: fetchBody, fetchHeaders, timeoutMs }) => {
+      const evaluation = page.evaluate(async ({ url: fetchUrl, body: fetchBody, fetchHeaders, timeoutMs }) => {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
@@ -152,19 +154,35 @@ async function fetchAllReviews(page, opts = {}) {
         } finally {
           clearTimeout(timeout);
         }
-      }, { url, body, fetchHeaders: headers, timeoutMs: requestTimeoutMs });
+      }, { url, body, fetchHeaders: headers, timeoutMs: effectiveTimeoutMs });
+      const outerTimeoutMs = Math.ceil(effectiveTimeoutMs * 1.25);
+      const watchdog = new Promise((_, reject) => {
+        evaluationWatchdog = setTimeout(() => {
+          const error = new Error(`review page.evaluate made no progress for ${outerTimeoutMs}ms`);
+          error.code = 'EVALUATION_STALLED';
+          reject(error);
+        }, outerTimeoutMs);
+      });
+      result = await Promise.race([evaluation, watchdog]);
     } catch (error) {
-      result = { error: `evaluate_failed:${String(error && error.message || error).slice(0, 100)}` };
+      if (error && error.code === 'EVALUATION_STALLED') {
+        page.close().catch(() => {});
+        result = { error: 'evaluate_stalled' };
+      } else {
+        result = { error: `evaluate_failed:${String(error && error.message || error).slice(0, 100)}` };
+      }
+    } finally {
+      clearTimeout(evaluationWatchdog);
     }
     if (onRequestResult) {
-      await onRequestResult({
+      timing = await onRequestResult({
         success: !result.error,
         structureComplete: typeof result.text === 'string' && result.text.length > 0,
         placeCount: 0,
         elapsedMs: Date.now() - started,
-      });
+      }) || timing;
     }
-    return result;
+    return { ...result, timingPolicy: timing };
   }
 
   // --- Step 1: Detect count + capture the first ListUgcPosts POST ---
@@ -255,6 +273,7 @@ async function fetchAllReviews(page, opts = {}) {
   let lastFlushAt = 0;
   let consecutiveEmpty = 0;
   let blocked = false;
+  let lastTiming = null;
   // Tracks the FIRST terminating break path (see all the `break;` below);
   // surfaced so callers can distinguish "Google ran out" from "we hit a bug".
   let stopReason = null;
@@ -267,12 +286,15 @@ async function fetchAllReviews(page, opts = {}) {
     let inner;
     try {
       const resp = await replayRequest(apiUrl, postBody, capturedHeaders);
+      lastTiming = resp.timingPolicy || lastTiming;
 
       if (resp.error) {
         if (resp.error === 429 || resp.error === 403) {
-          if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing 30s...`);
-          await page.waitForTimeout(30000);
+          const retryDelayMs = (resp.timingPolicy && resp.timingPolicy.retryDelayMs) || 5000;
+          if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing ${retryDelayMs}ms...`);
+          await page.waitForTimeout(retryDelayMs);
           const retry = await replayRequest(apiUrl, postBody, capturedHeaders);
+          lastTiming = retry.timingPolicy || lastTiming;
           if (retry.error) { blocked = true; stopReason = 'blocked_http_' + retry.error; break; }
           inner = parseBatchexecuteResponse(retry.text);
         } else {
@@ -297,10 +319,12 @@ async function fetchAllReviews(page, opts = {}) {
       const coverage = detectedCount ? (reviews.length / detectedCount) : 1;
       if (coverage < 0.8) {
         // Suspect block — pause and retry
-        if (onProgress) onProgress(reviews.length, effectiveMax, 'Empty page, suspect block, pausing 30s...');
-        await page.waitForTimeout(30000);
+        const retryDelayMs = (lastTiming && lastTiming.retryDelayMs) || 5000;
+        if (onProgress) onProgress(reviews.length, effectiveMax, `Empty page, suspect block, pausing ${retryDelayMs}ms...`);
+        await page.waitForTimeout(retryDelayMs);
         const retryBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
         const retryResp = await replayRequest(apiUrl, retryBody, capturedHeaders);
+        lastTiming = retryResp.timingPolicy || lastTiming;
         if (retryResp.error) { blocked = true; stopReason = 'blocked_low_coverage_http_' + retryResp.error; break; }
         const retryInner = parseBatchexecuteResponse(retryResp.text);
         if (!retryInner || !Array.isArray(retryInner[2]) || retryInner[2].length === 0) {

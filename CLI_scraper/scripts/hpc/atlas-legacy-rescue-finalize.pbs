@@ -1,0 +1,33 @@
+#!/bin/bash
+#PBS -N sgp_rescue_check
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=00:20:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${REVIEW_JOBS_FILE:?qsub must provide REVIEW_JOBS_FILE}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+EXPECTED_TOTAL=473
+
+test -r "$REVIEW_JOBS_FILE"
+module load singularity/3.8.3
+unset LD_PRELOAD
+
+singularity exec -B /hpctmp:/hpctmp "$SIF" \
+  node "$PROJECT/src/validate-legacy-poi-batch.js" \
+    --boundaries data/Park_singapore/473parks.geojson \
+    --batch sg_parks_473 \
+    --expected "$EXPECTED_TOTAL"
+
+while IFS= read -r job; do
+  test -n "$job" || continue
+  qrls "$job"
+  echo "released_review_job=$job"
+done < "$REVIEW_JOBS_FILE"
+
+echo "review_jobs_released_at=$(date -Is)"

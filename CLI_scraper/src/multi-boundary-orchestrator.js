@@ -47,6 +47,7 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
 const { filterByBoundary } = require('./filter-by-boundary');
 const PointsGenerator = require('./city-generator/points-generator');
 const { getTurf } = require('./city-generator/turf-loader');
+const { timingPolicy, updateEwma } = require('./scheduler/adaptive-timing');
 
 // Stage-2 defaults, same as poi-search.sh
 const DEFAULTS = {
@@ -247,7 +248,23 @@ async function scrapeArea(area, stage1, categories, opts) {
   // Browser-relaunch retry loop, same rationale as poi-search.sh: chromium
   // occasionally dies during long scrapes; batchSearchPOIs resumes from
   // poi_search.json + places.ndjson after a relaunch.
-  let browser = await chromium.launch({ headless: true, args: ['--disk-cache-size=1'] });
+  const launchBrowser = async () => {
+    const policy = timingPolicy('browser_launch', opts.browserLaunchMeanMs);
+    const started = Date.now();
+    const instance = await chromium.launch({
+      headless: true,
+      timeout: policy.requestTimeoutMs,
+      args: ['--disk-cache-size=1'],
+    });
+    opts.browserLaunchMeanMs = updateEwma(
+      opts.browserLaunchMeanMs,
+      opts.browserLaunchSamples,
+      Date.now() - started,
+    );
+    opts.browserLaunchSamples++;
+    return instance;
+  };
+  let browser = await launchBrowser();
   let result = null;
   try {
     for (let attempt = 1; attempt <= opts.maxBrowserRestarts; attempt++) {
@@ -276,8 +293,9 @@ async function scrapeArea(area, stage1, categories, opts) {
         try { await browser.close(); } catch (_) {}
         if (!isClosed || attempt >= opts.maxBrowserRestarts) throw e;
         console.warn(`  browser died, restarting (attempt ${attempt}/${opts.maxBrowserRestarts}): ${msg.substring(0, 120)}`);
-        await new Promise((r) => setTimeout(r, 5000));
-        browser = await chromium.launch({ headless: true, args: ['--disk-cache-size=1'] });
+        const retry = timingPolicy('browser_launch', opts.browserLaunchMeanMs, { attempt });
+        await new Promise((r) => setTimeout(r, retry.retryDelayMs));
+        browser = await launchBrowser();
       }
     }
   } finally {
@@ -423,6 +441,8 @@ function parseArgs(argv) {
     requestDelayMs: DEFAULTS.requestDelayMs,
     saveInterval: DEFAULTS.saveInterval,
     maxBrowserRestarts: DEFAULTS.maxBrowserRestarts,
+    browserLaunchMeanMs: 8000,
+    browserLaunchSamples: 0,
     bufferMeters: 0,
     dryRun: false,
     fresh: false,
@@ -450,6 +470,7 @@ function parseArgs(argv) {
       case '--threshold': opts.subdivideThreshold = parseInt(argv[++i], 10); break;
       case '--delay': opts.requestDelayMs = parseInt(argv[++i], 10); break;
       case '--save-interval': opts.saveInterval = parseInt(argv[++i], 10); break;
+      case '--browser-launch-mean-ms': opts.browserLaunchMeanMs = parseInt(argv[++i], 10); break;
       case '--buffer': opts.bufferMeters = parseFloat(argv[++i]); break;
       case '--dry-run': opts.dryRun = true; break;
       case '--fresh': opts.fresh = true; break;
@@ -503,6 +524,7 @@ Options:
   --threshold <n>          Subdivide threshold (default: 18)
   --delay <ms>             Request delay (default: 150)
   --save-interval <n>      Save progress every N requests (default: 20)
+  --browser-launch-mean-ms Bootstrap launch EWMA in ms (default: 8000)
   --dry-run                Split + generate points only, no scraping
   --fresh                  Re-run areas even if marked complete
   --help                   Show this message

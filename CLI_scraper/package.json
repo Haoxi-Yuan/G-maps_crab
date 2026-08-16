@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "scheduler:api": "node src/scheduler-api.js",
     "test": "node --test test/scheduler/*.test.js",
     "test:scheduler": "node --test test/scheduler/*.test.js"
   },

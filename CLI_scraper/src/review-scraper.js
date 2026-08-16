@@ -26,6 +26,8 @@ const { chromium } = require('playwright');
 const stealth = require('./stealth');
 const { fetchAllReviews } = require('./api-review-fetcher');
 const { makeSessionCapturer, fetchAllPhotoCategories } = require('./photo-category-fetcher');
+const { timingPolicy } = require('./scheduler/adaptive-timing');
+const { acquireLaunchSlot } = require('./scheduler/node-launch-gate');
 
 const CONFIG = {
   maxReviews: 50000,
@@ -279,19 +281,21 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   const logFile = outputFile.replace(/\.ndjson$/, '.log');
   const liveStatusFile = opts.liveStatusFile || outputFile.replace(/\.ndjson$/, '.live.json');
   const schedulerWorkflow = opts.schedulerWorkflow || process.env.GMAPS_SCHEDULER_WORKFLOW || null;
-  let schedulerPool = null;
   let scheduler = null;
+  let closeScheduler = async () => {};
   const schedulerWorkerId = `${require('os').hostname()}:${process.pid}:reviews`;
   if (schedulerWorkflow) {
-    const { createPool, PostgresScheduler } = require('./scheduler/postgres-store');
-    schedulerPool = createPool(process.env.DATABASE_URL, {
+    const { createSchedulerBackend } = require('./scheduler/backend');
+    const backend = createSchedulerBackend({
       applicationName: `gmaps-reviews:${schedulerWorkflow}:${schedulerWorkerId}`,
       max: 3,
     });
-    scheduler = new PostgresScheduler(schedulerPool);
+    scheduler = backend.scheduler;
+    closeScheduler = backend.close;
     await scheduler.registerWorker(schedulerWorkflow, schedulerWorkerId, 'reviews', {
       inputFile: path.resolve(inputFile),
       outputFile: path.resolve(outputFile),
+      schedulerTransport: backend.transport,
     });
   }
 
@@ -469,8 +473,44 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   }
 
+  const launchBrowser = async () => {
+    const launchTiming = scheduler
+      ? await scheduler.getTimingPolicy(schedulerWorkflow, 'browser_launch')
+      : timingPolicy('browser_launch');
+    const gateRoot = process.env.GMAPS_NODE_LAUNCH_GATE
+      || path.join('/tmp', `${process.env.USER || 'gmaps'}-browser-launch-gate`);
+    const gate = await acquireLaunchSlot(gateRoot, {
+      slots: Number(process.env.GMAPS_BROWSER_LAUNCH_SLOTS || 2),
+      timeoutMs: launchTiming.requestTimeoutMs,
+      staleMs: launchTiming.requestTimeoutMs * 2,
+      pollMs: Math.max(100, Math.min(1000, Math.round(launchTiming.meanMs / 10))),
+    });
+    const started = Date.now();
+    let instance;
+    try {
+      instance = await chromium.launch({
+        headless: true,
+        timeout: launchTiming.requestTimeoutMs,
+        args: stealth.buildLaunchArgs(),
+      });
+      if (scheduler) {
+        await scheduler.recordOperationLatency(
+          schedulerWorkflow,
+          'browser_launch',
+          Date.now() - started,
+        );
+      }
+      return instance;
+    } catch (error) {
+      if (instance) await instance.close().catch(() => {});
+      throw error;
+    } finally {
+      gate.release();
+    }
+  };
+
   // Launch browser
-  let browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
+  let browser = await launchBrowser();
 
   let processed = 0;
   let totalReviews = 0;
@@ -511,7 +551,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
       if (processed > 0 && processed % 200 === 0) {
         log(`  [MEMORY] Restarting browser after ${processed} places...`);
         try { await browser.close(); } catch (_) {}
-        browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
+        browser = await launchBrowser();
       }
 
       // Fresh context + page per place
@@ -524,7 +564,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         // Browser may have crashed, restart
         log(`  Browser error, restarting: ${e.message}`);
         try { await browser.close(); } catch (_) {}
-        browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
+        browser = await launchBrowser();
         const result = await stealth.createStealthContext(browser, {});
         context = result.context;
         page = result.page;
@@ -553,17 +593,45 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
         // Two-step load
         log('  Loading page...');
+        const navigationTiming = scheduler
+          ? await scheduler.getTimingPolicy(schedulerWorkflow, 'page_navigation')
+          : null;
+        const navigationTimeoutMs = navigationTiming
+          ? navigationTiming.requestTimeoutMs
+          : CONFIG.pageLoadTimeout;
+        const postNavigationWaitMs = navigationTiming
+          ? Math.max(500, Math.min(3000, navigationTiming.meanMs))
+          : 2000;
+        let navigationStarted = Date.now();
         await page.goto(`https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${pid}`, {
-          waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout
+          waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs
         });
-        await page.waitForTimeout(2000);
+        if (scheduler) {
+          await scheduler.recordOperationLatency(
+            schedulerWorkflow,
+            'page_navigation',
+            Date.now() - navigationStarted,
+          );
+        }
+        await page.waitForTimeout(postNavigationWaitMs);
 
         const placeUrl = isFtid
           ? `https://www.google.com/maps/place/?ftid=${pid}&hl=en`
           : `https://www.google.com/maps/place/?q=place_id:${pid}&hl=en`;
-        await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
-        await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(2000);
+        navigationStarted = Date.now();
+        await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
+        if (scheduler) {
+          await scheduler.recordOperationLatency(
+            schedulerWorkflow,
+            'page_navigation',
+            Date.now() - navigationStarted,
+          );
+        }
+        const selectorTimeoutMs = navigationTiming
+          ? Math.max(3000, Math.min(navigationTimeoutMs, navigationTiming.meanMs * 2))
+          : 15000;
+        await page.waitForSelector('h1', { timeout: selectorTimeoutMs }).catch(() => {});
+        await page.waitForTimeout(postNavigationWaitMs);
 
         page.off('response', previewHandler);
         photoSession.detach();
@@ -699,7 +767,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   } finally {
     await browser.close().catch(() => {});
-    if (schedulerPool) await schedulerPool.end().catch(() => {});
+    await closeScheduler().catch(() => {});
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -746,7 +814,7 @@ Options:
   --output <file>      Output file (default: reviews.ndjson in same dir)
   --max-reviews <n>    Max reviews per place (default: 50000)
   --live-status <file>  Atomically replaced live status JSON (default: reviews.live.json)
-  --scheduler-workflow <id>  Use PostgreSQL global 'reviews' request budget
+  --scheduler-workflow <id>  Use the global 'reviews' request budget (PostgreSQL or HTTPS API)
 `);
         process.exit(0);
     }

@@ -4,6 +4,12 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+const {
+  defaultMeanMs,
+  timingPolicy,
+  updateEwma,
+} = require('./adaptive-timing');
+
 const DEFAULT_SCHEMA = 'gmaps_scheduler';
 
 function sleep(ms) {
@@ -57,6 +63,79 @@ class PostgresScheduler {
       throw new Error('unsafe SQL identifier');
     }
     return `${this.schema}.${name}`;
+  }
+
+  async meanResponseMs(workflowId, operation, client = this.pool) {
+    const result = await client.query(
+      `SELECT ewma_ms, sample_count, last_sample_ms, updated_at
+       FROM ${this.table('operation_latency')}
+       WHERE workflow_id = $1 AND operation = $2`,
+      [workflowId, operation],
+    );
+    if (result.rowCount === 0) {
+      return {
+        meanMs: defaultMeanMs(operation),
+        sampleCount: 0,
+        lastSampleMs: null,
+        updatedAt: null,
+      };
+    }
+    const row = result.rows[0];
+    return {
+      meanMs: Number(row.ewma_ms),
+      sampleCount: Number(row.sample_count),
+      lastSampleMs: Number(row.last_sample_ms),
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async getTimingPolicy(workflowId, operation, options = {}, client = this.pool) {
+    const latency = await this.meanResponseMs(workflowId, operation, client);
+    return {
+      ...timingPolicy(operation, latency.meanMs, options),
+      sampleCount: latency.sampleCount,
+      lastSampleMs: latency.lastSampleMs,
+      modelUpdatedAt: latency.updatedAt,
+    };
+  }
+
+  async recordOperationLatency(workflowId, operation, elapsedMs) {
+    if (!Number.isFinite(Number(elapsedMs)) || Number(elapsedMs) <= 0) return null;
+    return inTransaction(this.pool, async (client) => {
+      await client.query(
+        `SELECT pg_advisory_xact_lock(hashtextextended(length($1)::text || ':' || $1 || ':' || $2, 0))`,
+        [workflowId, operation],
+      );
+      const currentResult = await client.query(
+        `SELECT ewma_ms, sample_count
+         FROM ${this.table('operation_latency')}
+         WHERE workflow_id = $1 AND operation = $2
+         FOR UPDATE`,
+        [workflowId, operation],
+      );
+      const currentMean = currentResult.rowCount
+        ? Number(currentResult.rows[0].ewma_ms)
+        : defaultMeanMs(operation);
+      const sampleCount = currentResult.rowCount
+        ? Number(currentResult.rows[0].sample_count)
+        : 0;
+      const nextMean = updateEwma(currentMean, sampleCount, Number(elapsedMs));
+      await client.query(
+        `INSERT INTO ${this.table('operation_latency')}
+           (workflow_id, operation, ewma_ms, sample_count, last_sample_ms)
+         VALUES ($1, $2, $3, 1, $4)
+         ON CONFLICT (workflow_id, operation) DO UPDATE SET
+           ewma_ms = EXCLUDED.ewma_ms,
+           sample_count = ${this.table('operation_latency')}.sample_count + 1,
+           last_sample_ms = EXCLUDED.last_sample_ms,
+           updated_at = clock_timestamp()`,
+        [workflowId, operation, nextMean, Math.min(600000, Math.round(Number(elapsedMs)))],
+      );
+      return {
+        ...timingPolicy(operation, nextMean),
+        sampleCount: sampleCount + 1,
+      };
+    });
   }
 
   async seedWorkflow({ workflowId, config = {}, boundaries, categoryGroups, tasks, budgets = [] }) {
@@ -192,6 +271,7 @@ class PostgresScheduler {
 
   async reapExpiredLeases(workflowId) {
     return inTransaction(this.pool, async (client) => {
+      const latency = await this.meanResponseMs(workflowId, 'poi_search', client);
       const expired = await client.query(
         `SELECT workflow_id, boundary_id, category_group, tile_id, estimated_requests,
                 attempt_count, max_attempts, lease_owner
@@ -204,15 +284,20 @@ class PostgresScheduler {
       for (const task of expired.rows) {
         const quarantine = task.attempt_count >= task.max_attempts;
         const status = quarantine ? 'QUARANTINED' : 'RETRY';
+        const retryDelayMs = timingPolicy('poi_search', latency.meanMs, {
+          attempt: Number(task.attempt_count),
+        }).retryDelayMs;
         await client.query(
           `UPDATE ${this.table('tasks')}
            SET status = $5, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                error_code = 'lease_expired', error_message = 'worker lease expired',
-               next_attempt_at = CASE WHEN $5 = 'RETRY' THEN clock_timestamp() + interval '30 seconds' ELSE next_attempt_at END,
+               next_attempt_at = CASE WHEN $5 = 'RETRY'
+                 THEN clock_timestamp() + make_interval(secs => $6::double precision / 1000.0)
+                 ELSE next_attempt_at END,
                completed_at = CASE WHEN $5 = 'QUARANTINED' THEN clock_timestamp() ELSE NULL END,
                updated_at = clock_timestamp()
            WHERE workflow_id = $1 AND boundary_id = $2 AND category_group = $3 AND tile_id = $4`,
-          [workflowId, task.boundary_id, task.category_group, task.tile_id, status],
+          [workflowId, task.boundary_id, task.category_group, task.tile_id, status, retryDelayMs],
         );
         await client.query(
           `UPDATE ${this.table('boundary_runtime')}
@@ -237,12 +322,14 @@ class PostgresScheduler {
   }
 
   async claimTask(workflowId, workerId, options = {}) {
-    const leaseSeconds = options.leaseSeconds || 300;
-    const starvationSeconds = options.starvationSeconds || 60;
     const tailThreshold = options.tailThreshold ?? 0.95;
     const token = crypto.randomUUID();
 
     return inTransaction(this.pool, async (client) => {
+      const latency = await this.meanResponseMs(workflowId, 'poi_search', client);
+      const basePolicy = timingPolicy('poi_search', latency.meanMs);
+      const starvationSeconds = options.starvationSeconds
+        || Math.ceil(basePolicy.fleetStallMs / 1000);
       const boundaryResult = await client.query(
         `SELECT br.*, b.geometry, b.root_zoom, b.boundary_name, b.weight,
                 CASE WHEN br.open_tasks + br.terminal_tasks = 0 THEN 1
@@ -290,12 +377,19 @@ class PostgresScheduler {
       );
       if (taskResult.rowCount === 0) return null;
       const task = taskResult.rows[0];
+      const taskPolicy = timingPolicy('poi_search', latency.meanMs, {
+        estimatedRequests: Number(task.estimated_requests),
+        attempt: Number(task.attempt_count) + 1,
+      });
+      const leaseSeconds = options.leaseSeconds
+        || Math.ceil(taskPolicy.leaseMs / 1000);
 
       await client.query(
         `UPDATE ${this.table('tasks')}
          SET status = 'CLAIMED', attempt_count = attempt_count + 1,
              lease_owner = $5, lease_token = $6,
              lease_expires_at = clock_timestamp() + make_interval(secs => $7),
+             last_progress_at = clock_timestamp(),
              updated_at = clock_timestamp()
          WHERE workflow_id = $1 AND boundary_id = $2 AND category_group = $3 AND tile_id = $4`,
         [workflowId, task.boundary_id, task.category_group, task.tile_id, workerId, token, leaseSeconds],
@@ -324,19 +418,52 @@ class PostgresScheduler {
         boundary_geometry: boundary.geometry,
         root_zoom: boundary.root_zoom,
         completion_ratio: Number(boundary.completion_ratio),
+        timing_policy: taskPolicy,
       };
     });
   }
 
-  async heartbeat(task, extendSeconds = 300) {
+  async markTaskProgress(task, kind = 'request_complete') {
+    const result = await this.pool.query(
+      `WITH updated_task AS (
+         UPDATE ${this.table('tasks')}
+         SET last_progress_at = clock_timestamp(), updated_at = clock_timestamp()
+         WHERE workflow_id = $1 AND boundary_id = $2 AND category_group = $3 AND tile_id = $4
+           AND status = 'CLAIMED' AND lease_token = $5
+         RETURNING lease_owner
+       )
+       UPDATE ${this.table('worker_sessions')} w
+       SET heartbeat_at = clock_timestamp(), last_progress_at = clock_timestamp(),
+           last_progress_kind = $6
+       FROM updated_task t
+       WHERE w.workflow_id = $1 AND w.worker_id = t.lease_owner AND w.endpoint = 'poi_search'
+       RETURNING w.worker_id`,
+      [task.workflow_id, task.boundary_id, task.category_group, task.tile_id, task.lease_token, kind],
+    );
+    return result.rowCount === 1;
+  }
+
+  async heartbeat(task, extendSeconds = null, progressTimeoutMs = null) {
+    const policy = (extendSeconds && progressTimeoutMs)
+      ? null
+      : await this.getTimingPolicy(task.workflow_id, 'poi_search', {
+        estimatedRequests: Number(task.estimated_requests || 1),
+        attempt: Number(task.attempt_count || 1),
+      });
+    const effectiveExtendSeconds = extendSeconds || Math.ceil(policy.leaseMs / 1000);
+    const effectiveProgressTimeoutMs = progressTimeoutMs || policy.progressTimeoutMs;
     const result = await this.pool.query(
       `UPDATE ${this.table('tasks')}
        SET lease_expires_at = clock_timestamp() + make_interval(secs => $6),
            updated_at = clock_timestamp()
        WHERE workflow_id = $1 AND boundary_id = $2 AND category_group = $3 AND tile_id = $4
          AND status = 'CLAIMED' AND lease_token = $5
+         AND last_progress_at >= clock_timestamp() - make_interval(secs => $7::double precision / 1000.0)
        RETURNING tile_id`,
-      [task.workflow_id, task.boundary_id, task.category_group, task.tile_id, task.lease_token, extendSeconds],
+      [
+        task.workflow_id, task.boundary_id, task.category_group, task.tile_id,
+        task.lease_token, effectiveExtendSeconds, effectiveProgressTimeoutMs,
+      ],
     );
     return result.rowCount === 1;
   }
@@ -365,13 +492,15 @@ class PostgresScheduler {
     );
   }
 
-  async isProbeFresh(workflowId, workerId, endpoint, freshnessSeconds = 300) {
+  async isProbeFresh(workflowId, workerId, endpoint, freshnessSeconds = null) {
+    const effectiveFreshnessSeconds = freshnessSeconds
+      || Math.ceil((await this.getTimingPolicy(workflowId, endpoint)).probeFreshMs / 1000);
     const result = await this.pool.query(
       `SELECT last_probe_ok_at IS NOT NULL
               AND last_probe_ok_at >= clock_timestamp() - make_interval(secs => $4) AS fresh
        FROM ${this.table('worker_sessions')}
        WHERE workflow_id = $1 AND worker_id = $2 AND endpoint = $3`,
-      [workflowId, workerId, endpoint, freshnessSeconds],
+      [workflowId, workerId, endpoint, effectiveFreshnessSeconds],
     );
     return result.rowCount === 1 && result.rows[0].fresh === true;
   }
@@ -411,38 +540,54 @@ class PostgresScheduler {
   }
 
   async waitForBudget(workflowId, endpoint, cost = 1, signal = null) {
+    const policy = await this.getTimingPolicy(workflowId, endpoint);
     while (true) {
       if (signal && signal.aborted) throw new Error('budget wait aborted');
       const result = await this.acquireBudget(workflowId, endpoint, cost);
-      if (result.granted) return;
-      await sleep(Math.min(5000, result.waitMs + Math.floor(Math.random() * 50)));
+      if (result.granted) return policy;
+      await sleep(Math.min(policy.idlePollMs, result.waitMs + Math.floor(Math.random() * 50)));
     }
   }
 
   async recordRequestOutcome(workflowId, endpoint, outcome) {
+    const elapsedMs = Number(outcome.elapsedMs || 0);
+    const latencySample = Boolean(outcome.success) && elapsedMs > 0;
     await this.pool.query(
       `INSERT INTO ${this.table('health_buckets')} (
          workflow_id, endpoint, bucket_start, request_count, success_count,
-         structurally_complete_count, nonempty_count, place_count
+         structurally_complete_count, nonempty_count, place_count,
+         latency_sum_ms, latency_samples
        ) VALUES (
          $1, $2, date_trunc('minute', clock_timestamp()), 1,
          CASE WHEN $3 THEN 1 ELSE 0 END,
          CASE WHEN $4 THEN 1 ELSE 0 END,
          CASE WHEN $5 > 0 THEN 1 ELSE 0 END,
-         $5
+         $5, CASE WHEN $6 THEN $7 ELSE 0 END, CASE WHEN $6 THEN 1 ELSE 0 END
        )
        ON CONFLICT (workflow_id, endpoint, bucket_start) DO UPDATE SET
          request_count = ${this.table('health_buckets')}.request_count + 1,
          success_count = ${this.table('health_buckets')}.success_count + CASE WHEN $3 THEN 1 ELSE 0 END,
          structurally_complete_count = ${this.table('health_buckets')}.structurally_complete_count + CASE WHEN $4 THEN 1 ELSE 0 END,
          nonempty_count = ${this.table('health_buckets')}.nonempty_count + CASE WHEN $5 > 0 THEN 1 ELSE 0 END,
-         place_count = ${this.table('health_buckets')}.place_count + $5`,
-      [workflowId, endpoint, Boolean(outcome.success), Boolean(outcome.structureComplete), Number(outcome.placeCount || 0)],
+         place_count = ${this.table('health_buckets')}.place_count + $5,
+         latency_sum_ms = ${this.table('health_buckets')}.latency_sum_ms + CASE WHEN $6 THEN $7 ELSE 0 END,
+         latency_samples = ${this.table('health_buckets')}.latency_samples + CASE WHEN $6 THEN 1 ELSE 0 END`,
+      [
+        workflowId, endpoint, Boolean(outcome.success), Boolean(outcome.structureComplete),
+        Number(outcome.placeCount || 0), latencySample, Math.round(elapsedMs),
+      ],
     );
+    if (latencySample) return this.recordOperationLatency(workflowId, endpoint, elapsedMs);
+    return this.getTimingPolicy(workflowId, endpoint);
   }
 
   async teamProductionNormal(workflowId, endpoint, options = {}) {
-    const windowMinutes = options.windowMinutes || 5;
+    const timing = await this.getTimingPolicy(workflowId, endpoint);
+    const windowMs = options.windowMs
+      || Math.max(30000, Math.min(120000, timing.fleetStallMs * 2));
+    const activeWorkerMs = options.activeWorkerMs
+      || Math.max(15000, Math.min(90000, timing.progressTimeoutMs * 2));
+    const windowMinutes = windowMs / 60000;
     const minSamples = options.minSamples || 20;
     const minSuccessRate = options.minSuccessRate ?? 0.9;
     const minStructureRate = options.minStructureRate ?? 0.9;
@@ -456,11 +601,11 @@ class PostgresScheduler {
          COALESCE(sum(h.place_count), 0)::bigint AS places,
          (SELECT count(*) FROM ${this.table('worker_sessions')} w
           WHERE w.workflow_id = $1 AND w.endpoint = $2
-            AND w.heartbeat_at >= clock_timestamp() - interval '2 minutes')::bigint AS active_workers
+            AND w.heartbeat_at >= clock_timestamp() - make_interval(secs => $4::double precision / 1000.0))::bigint AS active_workers
        FROM ${this.table('health_buckets')} h
        WHERE h.workflow_id = $1 AND h.endpoint = $2
-         AND h.bucket_start >= date_trunc('minute', clock_timestamp()) - make_interval(mins => $3)`,
-      [workflowId, endpoint, windowMinutes],
+         AND h.bucket_start >= date_trunc('minute', clock_timestamp()) - make_interval(secs => $3::double precision / 1000.0)`,
+      [workflowId, endpoint, windowMs, activeWorkerMs],
     );
     const row = result.rows[0];
     const requests = Number(row.requests);
@@ -490,6 +635,7 @@ class PostgresScheduler {
       placesPerRequest,
       requestsPerMinute,
       minimumThroughput,
+      timing,
     };
   }
 
@@ -498,12 +644,17 @@ class PostgresScheduler {
       const locked = await client.query(
         `SELECT * FROM ${this.table('tasks')}
          WHERE workflow_id = $1 AND boundary_id = $2 AND category_group = $3 AND tile_id = $4
-           AND status = 'CLAIMED' AND lease_token = $5
          FOR UPDATE`,
-        [task.workflow_id, task.boundary_id, task.category_group, task.tile_id, task.lease_token],
+        [task.workflow_id, task.boundary_id, task.category_group, task.tile_id],
       );
-      if (locked.rowCount !== 1) throw new Error(`task lease lost: ${task.task_key}`);
+      if (locked.rowCount !== 1) throw new Error(`unknown task: ${task.task_key}`);
       const current = locked.rows[0];
+      if (current.status !== 'CLAIMED' || current.lease_token !== task.lease_token) {
+        if (current.last_commit_token === task.lease_token && current.last_commit_result) {
+          return current.last_commit_result;
+        }
+        throw new Error(`task lease lost: ${task.task_key}`);
+      }
       const observations = Array.isArray(outcome.observations) ? outcome.observations : [];
 
       if (observations.length > 0) {
@@ -566,6 +717,7 @@ class PostgresScheduler {
       }
 
       const retryDelayMs = Math.max(0, Number(outcome.retryDelayMs || 0));
+      const commitResult = { status, insertedChildren, placeCount, requestCount };
       await client.query(
         `UPDATE ${this.table('tasks')}
          SET status = $6,
@@ -574,6 +726,8 @@ class PostgresScheduler {
              result_place_count = result_place_count + $8,
              error_code = $9, error_message = $10,
              empty_diagnostics = $11::jsonb,
+             last_commit_token = $5,
+             last_commit_result = $13::jsonb,
              next_attempt_at = CASE WHEN $6 = 'RETRY'
                THEN clock_timestamp() + make_interval(secs => $12::double precision / 1000.0)
                ELSE next_attempt_at END,
@@ -587,6 +741,7 @@ class PostgresScheduler {
           task.workflow_id, task.boundary_id, task.category_group, task.tile_id, task.lease_token,
           status, requestCount, placeCount, outcome.errorCode || null, outcome.errorMessage || null,
           outcome.diagnostics ? JSON.stringify(outcome.diagnostics) : null, retryDelayMs,
+          JSON.stringify(commitResult),
         ],
       );
 
@@ -625,7 +780,7 @@ class PostgresScheduler {
           task.lease_owner, status, requestCount, placeCount, insertedChildren, current.attempt_count,
         ],
       );
-      return { status, insertedChildren, placeCount, requestCount };
+      return commitResult;
     });
   }
 
@@ -667,6 +822,72 @@ class PostgresScheduler {
       split: Number(row.split),
       nextRetryAt: row.next_retry_at,
     };
+  }
+
+  async workflowStatus(workflowId) {
+    const [queue, boundaries, budgets, workers, latency] = await Promise.all([
+      this.queueState(workflowId),
+      this.progress(workflowId),
+      this.pool.query(
+        `SELECT endpoint, capacity, refill_per_second, tokens, updated_at
+         FROM ${this.table('request_budgets')} WHERE workflow_id = $1 ORDER BY endpoint`,
+        [workflowId],
+      ),
+      this.pool.query(
+        `SELECT worker_id, endpoint, heartbeat_at, last_progress_at, last_progress_kind,
+                last_probe_ok_at, last_probe_error, metadata
+         FROM ${this.table('worker_sessions')} WHERE workflow_id = $1 ORDER BY endpoint, worker_id`,
+        [workflowId],
+      ),
+      this.pool.query(
+        `SELECT operation, ewma_ms, sample_count, last_sample_ms, updated_at
+         FROM ${this.table('operation_latency')} WHERE workflow_id = $1 ORDER BY operation`,
+        [workflowId],
+      ),
+    ]);
+    return {
+      workflowId,
+      capturedAt: new Date().toISOString(),
+      queue,
+      boundaries,
+      budgets: budgets.rows,
+      workers: workers.rows,
+      latency: latency.rows,
+    };
+  }
+
+  async markWorkflowComplete(workflowId, manifest = {}) {
+    return inTransaction(this.pool, async (client) => {
+      const workflow = await client.query(
+        `SELECT workflow_id FROM ${this.table('workflows')}
+         WHERE workflow_id = $1 FOR UPDATE`,
+        [workflowId],
+      );
+      if (workflow.rowCount !== 1) throw new Error(`unknown workflow: ${workflowId}`);
+      const result = await client.query(
+        `SELECT
+           count(*) FILTER (WHERE status IN ('PENDING', 'RETRY'))::bigint AS waiting,
+           count(*) FILTER (WHERE status = 'CLAIMED')::bigint AS claimed,
+           count(*) FILTER (WHERE status = 'QUARANTINED')::bigint AS quarantined,
+           count(*) FILTER (WHERE status = 'DONE_EMPTY_SUSPECT')::bigint AS suspect_empty
+         FROM ${this.table('tasks')} WHERE workflow_id = $1`,
+        [workflowId],
+      );
+      const state = Object.fromEntries(Object.entries(result.rows[0]).map(([key, value]) => [key, Number(value)]));
+      if (state.waiting || state.claimed || state.quarantined || state.suspect_empty) {
+        const error = new Error(`workflow is not strictly finalizable: ${JSON.stringify(state)}`);
+        error.statusCode = 409;
+        throw error;
+      }
+      await client.query(
+        `UPDATE ${this.table('workflows')}
+         SET status = 'COMPLETE', config = config || jsonb_build_object('final_manifest', $2::jsonb),
+             updated_at = clock_timestamp()
+         WHERE workflow_id = $1`,
+        [workflowId, JSON.stringify(manifest)],
+      );
+      return { workflowId, status: 'COMPLETE', state };
+    });
   }
 
   async requeueTerminal(workflowId, status, options = {}) {
