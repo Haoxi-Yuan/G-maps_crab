@@ -1,0 +1,27 @@
+#!/bin/bash
+#PBS -N gmaps_finalize
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=02:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${WORKFLOW_ID:?WORKFLOW_ID is required}"
+: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}"
+: "${FINAL_OUTPUT:?FINAL_OUTPUT is required}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+test -r "$DATABASE_URL_FILE"
+export SINGULARITYENV_DATABASE_URL="$(<"$DATABASE_URL_FILE")"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+
+singularity exec -B /hpctmp:/hpctmp -B /home:/home "$SIF" \
+  node "$PROJECT/src/adaptive-poi-finalize.js" \
+    --workflow "$WORKFLOW_ID" \
+    --output "$FINAL_OUTPUT"

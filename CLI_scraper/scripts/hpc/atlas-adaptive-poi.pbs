@@ -1,0 +1,26 @@
+#!/bin/bash
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=240:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${WORKFLOW_ID:?WORKFLOW_ID is required}"
+: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+test -r "$DATABASE_URL_FILE"
+export SINGULARITYENV_DATABASE_URL="$(<"$DATABASE_URL_FILE")"
+export SINGULARITYENV_WORKFLOW_ID="$WORKFLOW_ID"
+export SINGULARITYENV_WORKERS_PER_JOB="${WORKERS_PER_JOB:-12}"
+export SINGULARITYENV_PBS_JOBID="${PBS_JOBID:-manual}"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+
+singularity exec -B /hpctmp:/hpctmp -B /tmp:/tmp -B /home:/home "$SIF" \
+  "$PROJECT/scripts/hpc/atlas-adaptive-poi-runner.sh"

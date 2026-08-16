@@ -278,6 +278,22 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   const maxReviews = opts.maxReviews || CONFIG.maxReviews;
   const logFile = outputFile.replace(/\.ndjson$/, '.log');
   const liveStatusFile = opts.liveStatusFile || outputFile.replace(/\.ndjson$/, '.live.json');
+  const schedulerWorkflow = opts.schedulerWorkflow || process.env.GMAPS_SCHEDULER_WORKFLOW || null;
+  let schedulerPool = null;
+  let scheduler = null;
+  const schedulerWorkerId = `${require('os').hostname()}:${process.pid}:reviews`;
+  if (schedulerWorkflow) {
+    const { createPool, PostgresScheduler } = require('./scheduler/postgres-store');
+    schedulerPool = createPool(process.env.DATABASE_URL, {
+      applicationName: `gmaps-reviews:${schedulerWorkflow}:${schedulerWorkerId}`,
+      max: 3,
+    });
+    scheduler = new PostgresScheduler(schedulerPool);
+    await scheduler.registerWorker(schedulerWorkflow, schedulerWorkerId, 'reviews', {
+      inputFile: path.resolve(inputFile),
+      outputFile: path.resolve(outputFile),
+    });
+  }
 
   // Log rotation
   if (fs.existsSync(logFile)) {
@@ -564,6 +580,12 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           pageSize: CONFIG.pageSize,
           delayMs: CONFIG.delayMs,
           flushEvery: 100,
+          beforeRequest: scheduler
+            ? () => scheduler.waitForBudget(schedulerWorkflow, 'reviews')
+            : null,
+          onRequestResult: scheduler
+            ? (result) => scheduler.recordRequestOutcome(schedulerWorkflow, 'reviews', result)
+            : null,
           onProgress: (count, total, msg) => {
             if (msg) log(`    ${msg}`);
             else log(`    progress: ${count}/${total}`);
@@ -677,6 +699,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   } finally {
     await browser.close().catch(() => {});
+    if (schedulerPool) await schedulerPool.end().catch(() => {});
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -710,6 +733,7 @@ if (require.main === module) {
       case '--output': outputFile = args[++i]; break;
       case '--max-reviews': opts.maxReviews = parseInt(args[++i]); break;
       case '--live-status': opts.liveStatusFile = args[++i]; break;
+      case '--scheduler-workflow': opts.schedulerWorkflow = args[++i]; break;
       case '--help':
         console.log(`
 Review Scraper
@@ -722,6 +746,7 @@ Options:
   --output <file>      Output file (default: reviews.ndjson in same dir)
   --max-reviews <n>    Max reviews per place (default: 50000)
   --live-status <file>  Atomically replaced live status JSON (default: reviews.live.json)
+  --scheduler-workflow <id>  Use PostgreSQL global 'reviews' request budget
 `);
         process.exit(0);
     }

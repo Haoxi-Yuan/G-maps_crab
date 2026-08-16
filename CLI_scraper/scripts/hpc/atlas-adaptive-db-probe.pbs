@@ -1,0 +1,44 @@
+#!/bin/bash
+#PBS -N gmaps_db_probe
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=00:05:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${WORKFLOW_ID:?WORKFLOW_ID is required}"
+: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+test -r "$DATABASE_URL_FILE"
+export SINGULARITYENV_DATABASE_URL="$(<"$DATABASE_URL_FILE")"
+export SINGULARITYENV_WORKFLOW_ID="$WORKFLOW_ID"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+
+singularity exec -B /hpctmp:/hpctmp -B /home:/home "$SIF" bash -lc "
+  set -Eeuo pipefail
+  cd '$PROJECT'
+  node - <<'NODE'
+const { createPool } = require('./src/scheduler/postgres-store');
+const pool = createPool(process.env.DATABASE_URL, {
+  applicationName: 'atlas-compute-db-preflight:' + process.env.WORKFLOW_ID,
+  max: 1,
+  connectionTimeoutMillis: 8000,
+});
+(async () => {
+  const result = await pool.query('select current_database() db, inet_server_addr() host, version() version');
+  console.log(JSON.stringify({ event: 'postgres_compute_preflight', ...result.rows[0] }));
+  await pool.end();
+})().catch(async (error) => {
+  console.error(error.stack || error);
+  await pool.end().catch(() => {});
+  process.exit(1);
+});
+NODE
+"

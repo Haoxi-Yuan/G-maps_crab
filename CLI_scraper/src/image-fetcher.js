@@ -25,6 +25,8 @@ const https = require('https');
 const Database = require('better-sqlite3');
 const { makeProxyAgent } = require('./proxy-fetch');
 
+let GLOBAL_IMAGE_LIMITER = null;
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Manifest schema + helpers (shared between this worker and the wizard)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -485,10 +487,22 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
     UPDATE blobs SET attempts = attempts + 1, last_error = ?, status = ?
     WHERE sha = ?
   `);
+  let requestRecorded = false;
   try {
+    if (GLOBAL_IMAGE_LIMITER) {
+      try { await GLOBAL_IMAGE_LIMITER.beforeRequest(); }
+      catch (error) {
+        error.schedulerBudgetUnavailable = true;
+        throw error;
+      }
+    }
     const { buf, mime } = await fetchBuffer(blob.url_full);
     if (!buf || buf.length < 1024) {
       throw new Error(`payload too small (${buf?.length || 0} bytes)`);
+    }
+    if (GLOBAL_IMAGE_LIMITER) {
+      await GLOBAL_IMAGE_LIMITER.onResult({ success: true, structureComplete: true, placeCount: 1 });
+      requestRecorded = true;
     }
     const finalAbs = await writeBlobAtomically(blobsRoot, blob.sha, buf);
     const rel = path.relative(imagesRoot, finalAbs);
@@ -510,6 +524,12 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
       }
     }
   } catch (e) {
+    // A database/rate-budget outage is not an image failure and must not burn
+    // the blob's retry counter. Leave it pending for the next worker pass.
+    if (e.schedulerBudgetUnavailable) throw e;
+    if (GLOBAL_IMAGE_LIMITER && !requestRecorded) {
+      await GLOBAL_IMAGE_LIMITER.onResult({ success: false, structureComplete: false, placeCount: 0 }).catch(() => {});
+    }
     const attempts = (blob.attempts || 0) + 1;
     const dead = attempts >= task.max_retries;
     bumpAttempt.run(String(e.message || e).slice(0, 200), dead ? 'dead' : 'failed', blob.sha);
@@ -611,6 +631,9 @@ async function workerLoop(db, task, imagesRoot) {
       catch (e) {
         if (e.retryAfter) {
           rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + e.retryAfter * 1000);
+        }
+        if (e.schedulerBudgetUnavailable) {
+          rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + 5000);
         }
       }
       finally { sem.release(); }
@@ -743,6 +766,23 @@ async function main() {
     process.exit(2);
   }
 
+  const schedulerWorkflow = args['scheduler-workflow'] || process.env.GMAPS_SCHEDULER_WORKFLOW || null;
+  let schedulerPool = null;
+  if (schedulerWorkflow) {
+    const { createPool, PostgresScheduler } = require('./scheduler/postgres-store');
+    schedulerPool = createPool(process.env.DATABASE_URL, {
+      applicationName: `gmaps-images:${schedulerWorkflow}:${process.pid}`,
+      max: 3,
+    });
+    const scheduler = new PostgresScheduler(schedulerPool);
+    const workerId = `${require('os').hostname()}:${process.pid}:images`;
+    await scheduler.registerWorker(schedulerWorkflow, workerId, 'images', { taskId });
+    GLOBAL_IMAGE_LIMITER = {
+      beforeRequest: () => scheduler.waitForBudget(schedulerWorkflow, 'images'),
+      onResult: (result) => scheduler.recordRequestOutcome(schedulerWorkflow, 'images', result),
+    };
+  }
+
   // Source-IP binding: egress via a specific local interface (the NUS tunnel)
   // so downloads dodge the GFW-blocked default route. Precedence:
   //   --bind flag > IMAGE_BIND_IP env > task.bind_ip (from DB).
@@ -794,6 +834,7 @@ async function main() {
   } finally {
     clearInterval(progT);
     db.close();
+    if (schedulerPool) await schedulerPool.end().catch(() => {});
   }
   console.log(`[task ${taskId}] exit`);
 }

@@ -124,7 +124,48 @@ async function fetchAllReviews(page, opts = {}) {
     onFlush = null,
     onPage = null,
     flushEvery = 100,
+    beforeRequest = null,
+    onRequestResult = null,
+    requestTimeoutMs = 45000,
   } = opts;
+
+  async function replayRequest(url, body, headers) {
+    if (beforeRequest) await beforeRequest();
+    const started = Date.now();
+    let result;
+    try {
+      result = await page.evaluate(async ({ url: fetchUrl, body: fetchBody, fetchHeaders, timeoutMs }) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(fetchUrl, {
+            method: 'POST',
+            credentials: 'include',
+            headers: fetchHeaders,
+            body: fetchBody,
+            signal: controller.signal,
+          });
+          if (!response.ok) return { error: response.status };
+          return { text: await response.text() };
+        } catch (error) {
+          return { error: error && error.name === 'AbortError' ? 'request_timeout' : String(error && error.message || error) };
+        } finally {
+          clearTimeout(timeout);
+        }
+      }, { url, body, fetchHeaders: headers, timeoutMs: requestTimeoutMs });
+    } catch (error) {
+      result = { error: `evaluate_failed:${String(error && error.message || error).slice(0, 100)}` };
+    }
+    if (onRequestResult) {
+      await onRequestResult({
+        success: !result.error,
+        structureComplete: typeof result.text === 'string' && result.text.length > 0,
+        placeCount: 0,
+        elapsedMs: Date.now() - started,
+      });
+    }
+    return result;
+  }
 
   // --- Step 1: Detect count + capture the first ListUgcPosts POST ---
   let capturedUrl = null;
@@ -225,30 +266,13 @@ async function fetchAllReviews(page, opts = {}) {
 
     let inner;
     try {
-      const resp = await page.evaluate(async ({ url, body, headers }) => {
-        const r = await fetch(url, {
-          method: 'POST',
-          credentials: 'include',
-          headers,
-          body,
-        });
-        if (!r.ok) return { error: r.status };
-        return { text: await r.text() };
-      }, { url: apiUrl, body: postBody, headers: capturedHeaders });
+      const resp = await replayRequest(apiUrl, postBody, capturedHeaders);
 
       if (resp.error) {
         if (resp.error === 429 || resp.error === 403) {
           if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing 30s...`);
           await page.waitForTimeout(30000);
-          const retry = await page.evaluate(async ({ url, body, headers }) => {
-            const r = await fetch(url, {
-              method: 'POST', credentials: 'include',
-              headers,
-              body,
-            });
-            if (!r.ok) return { error: r.status };
-            return { text: await r.text() };
-          }, { url: apiUrl, body: postBody, headers: capturedHeaders });
+          const retry = await replayRequest(apiUrl, postBody, capturedHeaders);
           if (retry.error) { blocked = true; stopReason = 'blocked_http_' + retry.error; break; }
           inner = parseBatchexecuteResponse(retry.text);
         } else {
@@ -276,15 +300,7 @@ async function fetchAllReviews(page, opts = {}) {
         if (onProgress) onProgress(reviews.length, effectiveMax, 'Empty page, suspect block, pausing 30s...');
         await page.waitForTimeout(30000);
         const retryBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
-        const retryResp = await page.evaluate(async ({ url, body, headers }) => {
-          const r = await fetch(url, {
-            method: 'POST', credentials: 'include',
-            headers,
-            body,
-          });
-          if (!r.ok) return { error: r.status };
-          return { text: await r.text() };
-        }, { url: apiUrl, body: retryBody, headers: capturedHeaders });
+        const retryResp = await replayRequest(apiUrl, retryBody, capturedHeaders);
         if (retryResp.error) { blocked = true; stopReason = 'blocked_low_coverage_http_' + retryResp.error; break; }
         const retryInner = parseBatchexecuteResponse(retryResp.text);
         if (!retryInner || !Array.isArray(retryInner[2]) || retryInner[2].length === 0) {

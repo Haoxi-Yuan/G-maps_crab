@@ -47,6 +47,7 @@ const CONFIG = {
   requestDelayMs: 150,
   maxRetries: 2,
   retryDelayMs: 5000,
+  requestTimeoutMs: 45000,
 
   saveInterval: 20,
   enableOffsetGrid: true,      // Second pass with half-step offset
@@ -154,7 +155,7 @@ async function capturePbTemplate(page, query, lat, lng) {
 // Single page fetch (one offset)
 // ============================================
 
-async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0) {
+async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0, options = {}) {
   let pb = pbTemplate
     .replace(/!1d[\d.]+/, `!1d${altitude}`)
     .replace(/!2d[-\d.]+/, `!2d${lng}`)
@@ -175,15 +176,23 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
   // browser death doesn't crash the whole scrape.
   let result;
   try {
-    result = await page.evaluate(async (fetchUrl) => {
+    result = await page.evaluate(async ({ fetchUrl, timeoutMs }) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const resp = await fetch(fetchUrl, { credentials: 'include' });
-      if (!resp.ok) return { error: resp.status, places: [] };
+      const resp = await fetch(fetchUrl, { credentials: 'include', signal: controller.signal });
+      if (!resp.ok) return { error: `http_${resp.status}`, httpStatus: resp.status, structureComplete: false, places: [] };
       const text = await resp.text();
       const idx = text.indexOf('[');
-      if (idx < 0) return { error: 'no_json', places: [] };
+      if (idx < 0) return { error: 'no_json', httpStatus: resp.status, structureComplete: false, places: [] };
       const data = JSON.parse(text.substring(idx));
-      const rawPlaces = data[64] || [];
+      // Keep "an empty result" distinct from a damaged/throttled response.
+      // A missing/non-array result slot is not accepted as an empty tile.
+      const structureComplete = Array.isArray(data) && Array.isArray(data[64]);
+      if (!structureComplete) {
+        return { error: 'incomplete_response_structure', httpStatus: resp.status, structureComplete: false, places: [] };
+      }
+      const rawPlaces = data[64];
       const places = [];
       for (const item of rawPlaces) {
         const p = item && item[1];
@@ -393,17 +402,20 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           plusCode: null,
         });
       }
-      return { places };
+      return { places, httpStatus: resp.status, structureComplete: true };
     } catch (e) {
-      return { error: e.message, places: [] };
+      const code = e && e.name === 'AbortError' ? 'request_timeout' : `fetch_failed:${e && e.message || e}`;
+      return { error: code, structureComplete: false, places: [] };
+    } finally {
+      clearTimeout(timeout);
     }
-    }, url);
+    }, { fetchUrl: url, timeoutMs: options.requestTimeoutMs ?? CONFIG.requestTimeoutMs });
   } catch (e) {
     const msg = String(e && e.message || '');
     if (/Target page, context or browser has been closed|Browser has been closed|Execution context was destroyed|page has been closed/i.test(msg)) {
-      return { error: 'browser_closed', places: [] };
+      return { error: 'browser_closed', structureComplete: false, places: [] };
     }
-    return { error: 'evaluate_failed:' + msg.substring(0, 80), places: [] };
+    return { error: 'evaluate_failed:' + msg.substring(0, 80), structureComplete: false, places: [] };
   }
   return result;
 }
@@ -418,6 +430,10 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
   const placeWriter = opts._placeWriter || null;
   const newIds = [];
   let lastPageFull = false;
+  let paginationComplete = true;
+  let responseStructureComplete = true;
+  let fetchError = null;
+  let pagesFetched = 0;
 
   for (let pageNum = 0; pageNum < maxPages; pageNum++) {
     const offset = pageNum * CONFIG.pageSize;
@@ -425,14 +441,22 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
 
     let result;
     for (let attempt = 0; attempt <= (opts.maxRetries ?? CONFIG.maxRetries); attempt++) {
-      result = await fetchPage(page, query, lat, lng, altitude, pbTemplate, offset);
+      result = await fetchPage(page, query, lat, lng, altitude, pbTemplate, offset, opts);
       if (!result.error) break;
       if (attempt < (opts.maxRetries ?? CONFIG.maxRetries)) {
         await page.waitForTimeout(opts.retryDelayMs ?? CONFIG.retryDelayMs);
       }
     }
 
-    if (result.error) { stats.errors++; break; }
+    if (result.error) {
+      stats.errors++;
+      paginationComplete = false;
+      responseStructureComplete = false;
+      fetchError = result.error;
+      break;
+    }
+    pagesFetched++;
+    responseStructureComplete = responseStructureComplete && result.structureComplete === true;
     if (result.places.length === 0) break;
 
     // Collect new IDs and stream-write fresh records (first occurrence wins,
@@ -468,7 +492,25 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
     if (pageNum < maxPages - 1) await page.waitForTimeout(delayMs);
   }
 
-  return { newIds, lastPageFull };
+  return {
+    newIds,
+    lastPageFull,
+    paginationComplete,
+    responseStructureComplete,
+    fetchError,
+    pagesFetched,
+  };
+}
+
+class PaginationIncompleteError extends Error {
+  constructor(query, bbox, fetchError) {
+    super(`Pagination incomplete for "${query}" at ${bbox.centerLat},${bbox.centerLng}: ${fetchError}`);
+    this.name = 'PaginationIncompleteError';
+    this.code = 'PAGINATION_INCOMPLETE';
+    this.query = query;
+    this.bbox = bbox;
+    this.fetchError = fetchError;
+  }
 }
 
 // ============================================
@@ -503,10 +545,11 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
   const altitude = calculateAltitude(zoom, bbox.centerLat);
 
   // Step 1: Paginate this cell fully
-  const { newIds, lastPageFull } = await fetchCellPaginated(
+  const { newIds, lastPageFull, paginationComplete, fetchError } = await fetchCellPaginated(
     page, query, bbox.centerLat, bbox.centerLng, altitude, pbTemplate,
     globalIds, stats, opts
   );
+  if (!paginationComplete) throw new PaginationIncompleteError(query, bbox, fetchError);
 
   const indent = '  '.repeat(Math.min(depth, 4));
   const cellLabel = `${indent}[d${depth}] (${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}) ${bbox.sizeKm.toFixed(2)}km z${zoom}`;
@@ -572,10 +615,18 @@ async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, stats, op
         if (!cellHasSeed) continue;
       }
 
-      const { newIds } = await fetchCellPaginated(
+      const pageResult = await fetchCellPaginated(
         page, query, lat, lng, altitude, pbTemplate,
         globalIds, stats, opts
       );
+      if (!pageResult.paginationComplete) {
+        throw new PaginationIncompleteError(query, {
+          centerLat: lat,
+          centerLng: lng,
+          sizeKm: cellSizeKm,
+        }, pageResult.fetchError);
+      }
+      const { newIds } = pageResult;
       cellCount++;
       if (newIds.length > 0 && onProgress) {
         onProgress(stats, `  [offset] (${lat.toFixed(4)},${lng.toFixed(4)}): +${newIds.length} new`);
@@ -990,5 +1041,7 @@ module.exports = {
   loadPointsFromCSV,
   loadPointsFromJSON,
   loadCategories,
+  formatPlaceRecord,
+  PaginationIncompleteError,
   CONFIG,
 };
