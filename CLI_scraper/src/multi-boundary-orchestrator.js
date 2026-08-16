@@ -15,8 +15,12 @@
  * Each area gets its own directory pair, named like a normal city so every
  * existing tool (poi-search.sh, review-scrape.sh, status menu) sees it:
  *
- *   data/<batch>__<slug>/<batch>__<slug>_boundary.geojson|_points.json|...
- *   output/<batch>__<slug>/poi_search.json|places.ndjson|...
+ *   data/_batches/<batch>/<batch>__<slug>/<batch>__<slug>_boundary.geojson|_points.json|...
+ *   output/_batches/<batch>/<batch>__<slug>/poi_search.json|places.ndjson|...
+ *
+ * Areas live under _batches/<batch>/ so a 370-park batch doesn't bury the
+ * handful of city folders at the top level; --flat restores the old placement,
+ * and scripts/migrate-batch-layout.sh relocates dirs from older runs.
  *
  * Resume is two-level: areas with an _area_complete.json marker are skipped;
  * the in-progress area resumes via stage 2's own poi_search.json/places.ndjson
@@ -95,7 +99,7 @@ function isPolygonal(geom) {
  * A Feature that is itself a MultiPolygon stays ONE area (an area may
  * legitimately be disjoint, e.g. a district with islands).
  */
-function splitAreas(boundariesFile, batchName) {
+function splitAreas(boundariesFile, batchName, flatLayout = false) {
   const data = JSON.parse(fs.readFileSync(boundariesFile, 'utf8'));
   let features;
   if (data.type === 'FeatureCollection') features = data.features || [];
@@ -119,7 +123,11 @@ function splitAreas(boundariesFile, batchName) {
     }
     seenSlugs.add(slug);
     const dirSlug = `${sanitizeName(batchName)}__${slug}`;
-    areas.push({ index: i, name, slug, dirSlug, feature });
+    // relDir is the path under data/ and output/. Grouped layout keeps a batch's
+    // hundreds of areas inside _batches/<batch>/ instead of flooding the top
+    // level alongside city folders; --flat restores the original placement.
+    const relDir = flatLayout ? dirSlug : path.join('_batches', sanitizeName(batchName), dirSlug);
+    areas.push({ index: i, name, slug, dirSlug, relDir, feature });
   });
 
   if (skippedNonPolygonal > 0) {
@@ -136,7 +144,7 @@ function splitAreas(boundariesFile, batchName) {
 // ============================================
 
 async function prepareAreaStage1(area, opts) {
-  const dataDir = path.join(ROOT, 'data', area.dirSlug);
+  const dataDir = path.join(ROOT, 'data', area.relDir || area.dirSlug);
   fs.mkdirSync(dataDir, { recursive: true });
 
   const boundaryPath = path.join(dataDir, `${area.dirSlug}_boundary.geojson`);
@@ -221,7 +229,7 @@ async function prepareAreaStage1(area, opts) {
 // ============================================
 
 async function scrapeArea(area, stage1, categories, opts) {
-  const outDir = path.join(ROOT, 'output', area.dirSlug);
+  const outDir = path.join(ROOT, 'output', area.relDir || area.dirSlug);
   fs.mkdirSync(outDir, { recursive: true });
 
   const incrementalSaveFile = path.join(outDir, 'poi_search.json');
@@ -252,6 +260,14 @@ async function scrapeArea(area, stage1, categories, opts) {
           saveInterval: opts.saveInterval,
           incrementalSaveFile,
           boundaryFile: stage1.boundaryPath,
+          // Self-adapt mode: category-free discovery, sharing one yield-ranked
+          // vocabulary file across all areas in the batch (discover-once).
+          selfAdapt: opts.selfAdapt,
+          saVocabFile: opts.saVocabFile,
+          saMaxQueries: opts.saMaxQueries,
+          saStopAfterDry: opts.saStopAfterDry,
+          saMinYield: opts.saMinYield,
+          saSeeds: opts.saSeeds,
         });
         break;
       } catch (e) {
@@ -291,10 +307,10 @@ async function scrapeArea(area, stage1, categories, opts) {
 // ============================================
 
 async function main(opts) {
-  const areas = splitAreas(opts.boundariesFile, opts.batchName);
+  const areas = splitAreas(opts.boundariesFile, opts.batchName, opts.flatLayout);
   console.log(`[MULTI] ${areas.length} area(s) in ${opts.boundariesFile}:`);
 
-  const selected = opts.areaFilter
+  let selected = opts.areaFilter
     ? areas.filter((a) => opts.areaFilter.has(a.slug))
     : areas;
   if (opts.areaFilter) {
@@ -304,9 +320,18 @@ async function main(opts) {
     }
   }
 
+  // Sharding: `--shard i/N` keeps a disjoint 1/N slice of the selected areas
+  // (round-robin by index) so N processes cover everything with no overlap.
+  // Run one per machine/IP; give each its own --sa-vocab to avoid a write race.
+  if (opts.shard) {
+    const { i, n } = opts.shard;
+    selected = selected.filter((_, idx) => idx % n === (i - 1));
+    console.log(`[MULTI] Shard ${i}/${n}: ${selected.length} of the selected areas`);
+  }
+
   for (const a of areas) {
     const mark = selected.includes(a) ? '*' : ' ';
-    console.log(`  ${mark} [${a.index + 1}] ${a.slug}  (${a.name})  -> data|output/${a.dirSlug}/`);
+    console.log(`  ${mark} [${a.index + 1}] ${a.slug}  (${a.name})  -> data|output/${a.relDir || a.dirSlug}/`);
   }
 
   if (opts.dryRun) {
@@ -320,13 +345,21 @@ async function main(opts) {
   }
 
   const api = require('./poi-searcher-api');
-  let categories = api.loadCategories(path.resolve(ROOT, opts.categoriesFile));
-  if (opts.categoryFilter) {
-    const wanted = new Set(opts.categoryFilter.map((s) => s.toLowerCase()));
-    categories = categories.filter((c) => wanted.has(c.toLowerCase()));
-    console.log(`[MULTI] Filtered to ${categories.length} categories: ${categories.join(', ')}`);
+  let categories = [];
+  if (opts.selfAdapt) {
+    // Category-free: batchSearchPOIs drives its own query set from Google's
+    // labels. Vocabulary is shared across the batch (one file) for discover-once.
+    if (!opts.saVocabFile) opts.saVocabFile = path.join(ROOT, 'output', `_selfadapt_vocab__${opts.batchName}.json`);
+    console.log(`[MULTI] Self-adapt mode: seeds -> Google-label closure, shared vocab ${opts.saVocabFile}, budget ${opts.saMaxQueries}/area`);
+  } else {
+    categories = api.loadCategories(path.resolve(ROOT, opts.categoriesFile));
+    if (opts.categoryFilter) {
+      const wanted = new Set(opts.categoryFilter.map((s) => s.toLowerCase()));
+      categories = categories.filter((c) => wanted.has(c.toLowerCase()));
+      console.log(`[MULTI] Filtered to ${categories.length} categories: ${categories.join(', ')}`);
+    }
+    if (categories.length === 0) throw new Error('No categories to search');
   }
-  if (categories.length === 0) throw new Error('No categories to search');
 
   const summary = [];
   let n = 0;
@@ -393,6 +426,14 @@ function parseArgs(argv) {
     bufferMeters: 0,
     dryRun: false,
     fresh: false,
+    shard: null,
+    flatLayout: false,
+    selfAdapt: false,
+    saVocabFile: null,
+    saMaxQueries: 300,
+    saStopAfterDry: 0,
+    saMinYield: 1,
+    saSeeds: null,
   };
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
@@ -412,6 +453,14 @@ function parseArgs(argv) {
       case '--buffer': opts.bufferMeters = parseFloat(argv[++i]); break;
       case '--dry-run': opts.dryRun = true; break;
       case '--fresh': opts.fresh = true; break;
+      case '--shard': { const m = String(argv[++i]).match(/^(\d+)\/(\d+)$/); if (!m) throw new Error('--shard must be i/N, e.g. 1/6'); opts.shard = { i: parseInt(m[1], 10), n: parseInt(m[2], 10) }; break; }
+      case '--flat': opts.flatLayout = true; break;
+      case '--self-adapt': opts.selfAdapt = true; break;
+      case '--sa-vocab': opts.saVocabFile = argv[++i]; break;
+      case '--sa-max-queries': opts.saMaxQueries = parseInt(argv[++i], 10); break;
+      case '--sa-stop-after-dry': opts.saStopAfterDry = parseInt(argv[++i], 10); break;
+      case '--sa-min-yield': opts.saMinYield = parseInt(argv[++i], 10); break;
+      case '--sa-seeds': opts.saSeeds = argv[++i].split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--help':
         console.log(`
 Multi-Boundary Orchestrator — scrape several disjoint boundaries in one run
@@ -430,7 +479,21 @@ Options:
   --name <batch>           Batch name, prefixes every area directory (required)
   --categories <file>      Category taxonomy (default: config/categories.json)
   --category-filter a,b    Only search these categories
+  --self-adapt             Category-free: discover types from Google's own labels
+                           (generic seeds -> closure), no hand-curated taxonomy.
+                           One yield-ranked vocab shared across the batch.
+  --sa-max-queries N       Query budget per area in self-adapt mode (default 300)
+  --sa-stop-after-dry K    Stop an area after K consecutive <min-yield queries (0=off)
+  --sa-min-yield N         "Dry" query = fewer than N new POIs (default 1)
+  --sa-seeds a,b,c         Override the generic bootstrap seeds
+  --sa-vocab <file>        Shared vocab file (default output/_selfadapt_vocab__<batch>.json)
   --areas slug1,slug2      Only run these areas (slugs from feature names)
+  --flat                   Put area dirs directly in data/ and output/ (legacy).
+                           Default groups them under _batches/<batch>/ so a batch's
+                           hundreds of areas don't flood the top level.
+  --shard i/N              Run a disjoint 1/N slice of areas (round-robin). Launch
+                           N processes (1/N..N/N), one per machine/IP, to shard a
+                           batch. Give each its own --sa-vocab in self-adapt mode.
   --buffer <meters>        Expand each boundary outward by N m before search+filter (default 0)
   --cell-size <m>          Sampling density for stage 1 (default: 1000)
   --points <n>             Fixed number of sampling points per area (default: auto)

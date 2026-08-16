@@ -4,6 +4,10 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
+export TMPDIR="$SCRIPT_DIR/.tmp"
+export PLAYWRIGHT_BROWSERS_PATH="$SCRIPT_DIR/.playwright-browsers"
+mkdir -p "$TMPDIR" "$PLAYWRIGHT_BROWSERS_PATH"
+
 # ============================================
 # Defaults
 # ============================================
@@ -82,7 +86,8 @@ show_status() {
     echo ""
   fi
 
-  for f in output/*/reviews.ndjson; do
+  for f in output/*/reviews.ndjson output/_batches/*/*/reviews.ndjson; do
+    [ -f "$f" ] || continue
     [ -f "$f" ] || continue
     local city=$(basename "$(dirname "$f")")
     local lines=$(wc -l < "$f" 2>/dev/null || echo 0)
@@ -190,7 +195,8 @@ step_select_city() {
 
   local i=1
   CITY_DIRS=()
-  for dir in output/*/; do
+  for dir in output/*/ output/_batches/*/*/; do
+    [ -d "$dir" ] || continue
     local pf="${dir}places.ndjson"
     [ -f "$pf" ] || continue
     local city=$(basename "$dir")
@@ -406,6 +412,11 @@ run_direct() {
   if [ -z "$INPUT_FILE" ] && [ -n "$CITY_NAME" ]; then
     local city_slug=$(echo "$CITY_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd 'a-z0-9_')
     INPUT_FILE="output/${city_slug}/places.ndjson"
+    if [ ! -f "$INPUT_FILE" ]; then
+      # grouped batch layout: output/_batches/<batch>/<batch>__<slug>/
+      local grouped=$(ls -d output/_batches/*/"${city_slug}"/ 2>/dev/null | head -1)
+      [ -n "$grouped" ] && INPUT_FILE="${grouped}places.ndjson"
+    fi
   fi
 
   if [ ! -f "$INPUT_FILE" ]; then

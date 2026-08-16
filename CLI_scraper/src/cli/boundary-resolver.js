@@ -85,26 +85,45 @@ function _postOnce(query, overpassUrl) {
   });
 }
 
+// A heavy `out geom` draws sporadic 504s from every mirror, so a single pass
+// over the list gives up too early: retry the list with backoff, and prefer the
+// mirror that answered last (a hardcoded order goes stale as mirrors die).
+const OVERPASS_ROUNDS = 2;
+let _lastGoodUrl = null;
+
 async function overpassPost(query) {
   const attempts = [];
-  for (const url of OVERPASS_URLS) {
-    const gap = MIN_GAP_MS - (Date.now() - _lastQueryAt);
-    if (gap > 0) await new Promise((r) => setTimeout(r, gap));
-    _lastQueryAt = Date.now();
-    try { return await _postOnce(query, url); }
-    catch (e) {
-      attempts.push({ url, error: e });
-      const msg = String(e && e.message || '');
-      const code = String(e && e.code || '');
-      const transient = /status (429|502|503|504)|timeout|ECONN|ETIMEDOUT|ENOTFOUND/i.test(msg)
-        || /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(code);
-      if (!transient) {
-        e.attempts = attempts;
-        throw e;
+  for (let round = 0; round < OVERPASS_ROUNDS; round++) {
+    const urls = _lastGoodUrl
+      ? [_lastGoodUrl, ...OVERPASS_URLS.filter((u) => u !== _lastGoodUrl)]
+      : OVERPASS_URLS.slice();
+    for (const url of urls) {
+      const gap = MIN_GAP_MS - (Date.now() - _lastQueryAt);
+      if (gap > 0) await new Promise((r) => setTimeout(r, gap));
+      _lastQueryAt = Date.now();
+      try {
+        const res = await _postOnce(query, url);
+        _lastGoodUrl = url;
+        return res;
+      } catch (e) {
+        attempts.push({ url, error: e, round: round + 1 });
+        if (_lastGoodUrl === url) _lastGoodUrl = null;
+        const msg = String(e && e.message || '');
+        const code = String(e && e.code || '');
+        const transient = /status (429|502|503|504)|timeout|ECONN|ETIMEDOUT|ENOTFOUND/i.test(msg)
+          || /ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(code);
+        if (!transient) {
+          e.attempts = attempts;
+          throw e;
+        }
       }
     }
+    if (round < OVERPASS_ROUNDS - 1) {
+      console.log(`  all Overpass mirrors busy; retrying in 5s (round ${round + 2}/${OVERPASS_ROUNDS})...`);
+      await new Promise((r) => setTimeout(r, 5000));
+    }
   }
-  const agg = new Error('All Overpass mirrors failed');
+  const agg = new Error(`All Overpass mirrors failed after ${OVERPASS_ROUNDS} rounds`);
   agg.attempts = attempts;
   throw agg;
 }
@@ -324,6 +343,87 @@ async function fetchRelationGeometry(osmId) {
 }
 
 /**
+ * Fetch a relation's boundary as a ready GeoJSON FeatureCollection, without
+ * Overpass. `out geom` on a large relation (e.g. 東京23区) routinely 504s on
+ * every mirror, while these two endpoints serve the same polygon in ~1s:
+ *
+ *   1. Nominatim lookup with polygon_geojson=1 — same service that produced the
+ *      candidate list, so the osm_id is guaranteed to resolve.
+ *   2. polygons.openstreetmap.fr — purpose-built polygon server, keyed by
+ *      relation id, and typically higher-fidelity than Nominatim's simplified
+ *      outline.
+ *
+ * Returns null (rather than throwing) when neither source has the relation, so
+ * the caller can fall back to Overpass.
+ */
+async function fetchRelationGeoJSON(osmId, meta = {}) {
+  const props = (extra) => ({
+    name: meta.name || 'Unknown',
+    admin_level: meta.admin_level,
+    osm_id: osmId,
+    ...extra,
+  });
+  const wrap = (geometry, source) => ({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', properties: props({ geometry_source: source }), geometry }],
+  });
+  const isPolygonal = (g) => g && (g.type === 'Polygon' || g.type === 'MultiPolygon')
+    && Array.isArray(g.coordinates) && g.coordinates.length > 0;
+
+  // 1) Nominatim
+  try {
+    const res = await httpGetJson(
+      `https://nominatim.openstreetmap.org/lookup?osm_ids=R${osmId}&format=json&polygon_geojson=1`
+    );
+    const g = Array.isArray(res) && res[0] && res[0].geojson;
+    if (isPolygonal(g)) {
+      if (!meta.name && res[0].display_name) meta.name = String(res[0].display_name).split(',')[0];
+      return wrap(g, 'nominatim');
+    }
+  } catch (e) { /* fall through */ }
+
+  // 2) polygons.openstreetmap.fr
+  try {
+    const g = await httpGetJson(
+      `https://polygons.openstreetmap.fr/get_geojson.py?id=${osmId}&params=0`
+    );
+    if (isPolygonal(g)) return wrap(g, 'polygons.openstreetmap.fr');
+  } catch (e) { /* fall through */ }
+
+  return null;
+}
+
+function httpGetJson(urlStr, timeoutMs = 25000) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    let settled = false;
+    const finish = (err, val) => { if (!settled) { settled = true; err ? reject(err) : resolve(val); } };
+    const req = https.get({
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+      timeout: timeoutMs,
+    }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        const e = new Error(`HTTP ${res.statusCode} from ${u.hostname}`);
+        e.statusCode = res.statusCode;
+        return finish(e);
+      }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try { finish(null, JSON.parse(body)); }
+        catch (e) { finish(new Error(`Bad JSON from ${u.hostname}: ${e.message}`)); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); finish(new Error('Request timeout')); });
+    req.on('error', (e) => finish(e));
+  });
+}
+
+/**
  * Score how well a candidate matches "the city administrative boundary".
  *
  * Globally most cities sit at admin_level 8 (US, FR, DE, NL, ...) or 7
@@ -447,4 +547,4 @@ async function _nominatimGet(path) {
   });
 }
 
-module.exports = { listCandidates, fetchRelationGeometry, fetchChildAdmins, pickBestCity, scoreCityCandidate };
+module.exports = { listCandidates, fetchRelationGeometry, fetchRelationGeoJSON, fetchChildAdmins, pickBestCity, scoreCityCandidate };

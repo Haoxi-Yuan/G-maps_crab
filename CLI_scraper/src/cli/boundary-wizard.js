@@ -110,7 +110,7 @@ async function main() {
       // --- Disambiguation: list OSM relations matching the name and let the
       // user pick one. Avoids merging unrelated same-named cities (e.g. the
       // Amsterdam in NL vs a namesake village in Missouri).
-      const { listCandidates, fetchRelationGeometry, pickBestCity } = require('./boundary-resolver.js');
+      const { listCandidates, fetchRelationGeometry, fetchRelationGeoJSON, pickBestCity } = require('./boundary-resolver.js');
       const BoundaryGenerator = require('../city-generator/boundary-generator.js');
 
       console.log('');
@@ -270,9 +270,19 @@ async function main() {
       console.log(`Selected: ${chosen.name}  (osm_id=${chosen.osm_id}, admin_level=${chosen.admin_level})`);
 
       console.log('Fetching geometry...');
+      // Fast path: Nominatim / polygons.openstreetmap.fr return the polygon
+      // directly in ~1s. Overpass `out geom` on a large relation routinely 504s
+      // on every mirror, so it is only the fallback now.
       let overpassData;
+      let directGeojson = null;
       try {
-        overpassData = await fetchRelationGeometry(chosen.osm_id);
+        directGeojson = await fetchRelationGeoJSON(chosen.osm_id, {
+          name: chosen.name || cityName,
+          admin_level: chosen.admin_level,
+        });
+      } catch (e) { directGeojson = null; }
+      try {
+        if (!directGeojson) overpassData = await fetchRelationGeometry(chosen.osm_id);
       } catch (e) {
         const detail = e && (e.message || e.code) || '(no error message)';
         console.error('Geometry fetch failed:', detail);
@@ -291,7 +301,11 @@ async function main() {
         process.exit(1);
       }
       const bg = new BoundaryGenerator();
-      const geojson = await bg._convertToGeoJSON(overpassData);
+      const geojson = directGeojson || await bg._convertToGeoJSON(overpassData);
+      if (directGeojson) {
+        const src = directGeojson.features?.[0]?.properties?.geometry_source;
+        console.log(`  geometry from ${src}`);
+      }
       // Force the feature's name to match what the user typed so the rest of
       // the pipeline (output dir slug, file names) stays consistent.
       if (geojson && geojson.features) {
