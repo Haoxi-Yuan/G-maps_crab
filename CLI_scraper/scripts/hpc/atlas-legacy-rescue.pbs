@@ -20,6 +20,7 @@ test -d "$PROJECT/node_modules/playwright"
 
 export SINGULARITYENV_AREAS_FILE="$AREAS_FILE"
 export SINGULARITYENV_RESCUE_WORKERS="${RESCUE_WORKERS:-4}"
+export SINGULARITYENV_MAX_RESCUE_PASSES="${MAX_RESCUE_PASSES:-4}"
 export SINGULARITYENV_PBS_JOBID="${PBS_JOBID:-manual}"
 
 singularity exec -B /hpctmp:/hpctmp -B /tmp:/tmp "$SIF" \
