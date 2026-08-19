@@ -34,6 +34,7 @@ const CAPTURE_RAW_PHOTOS = process.env.CAPTURE_RAW_PHOTOS === '1';
 // previous 30 s cost ~12% of worker time for that. Override to compare.
 const BLOCK_BACKOFF_MS = Number(process.env.BLOCK_BACKOFF_MS) || 10000;
 
+
 /**
  * Parse Google's chunked batchexecute response and return the inner data
  * for our service. Format on the wire:
@@ -306,7 +307,29 @@ async function fetchAllReviews(page, opts = {}) {
       break;
     }
 
-    if (!inner) { stopReason = 'parse_failure'; break; }
+    if (!inner) {
+      // A 200 whose body carries no wrb.fr envelope for our RPC. Observed on
+      // roughly a tenth of places on the first page, and a plain retry clears
+      // it, so treat it as transient rather than terminal — the old behaviour
+      // dropped the whole place with zero reviews. Record what came back so a
+      // persistent failure is diagnosable from the log instead of opaque.
+      if (onProgress) onProgress(reviews.length, effectiveMax, 'Unparseable response, retrying once...');
+      await page.waitForTimeout(BLOCK_BACKOFF_MS);
+      let retryParse;
+      try {
+        retryParse = await postBatchPage(page, apiUrl, postBody, capturedHeaders);
+      } catch (e) {
+        stopReason = 'parse_failure_retry_exception:' + (e && e.message || 'unknown').substring(0, 40);
+        break;
+      }
+      if (retryParse.error) { stopReason = 'parse_failure_retry_http_' + retryParse.error; break; }
+      inner = parseBatchexecuteResponse(retryParse.text);
+      if (!inner) {
+        stopReason = 'parse_failure';
+        console.error(`    [parse_failure] body[0..160]=${JSON.stringify((retryParse.text || '').slice(0, 160))}`);
+        break;
+      }
+    }
 
     // inner = [null, nextToken, reviewsArray]
     nextToken = inner[1] || '';
@@ -441,6 +464,7 @@ async function fetchAllReviews(page, opts = {}) {
   if (stopReason === null) {
     stopReason = reviews.length >= effectiveMax ? 'reached_max' : 'loop_exit';
   }
+
 
   if (onFlush && reviews.length > lastFlushAt) {
     onFlush(reviews.slice(lastFlushAt));
