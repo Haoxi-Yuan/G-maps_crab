@@ -270,6 +270,7 @@ async function fetchAllReviews(page, opts = {}) {
   }
   page.off('request', requestHandler);
 
+
   if (!capturedBody) {
     return { reviews: [], detectedCount, error: 'api_url_not_captured', stopReason: 'api_url_not_captured' };
   }

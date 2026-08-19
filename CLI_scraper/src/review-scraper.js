@@ -559,7 +559,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         let flushedCount = 0;
         let lastLiveWrite = 0;
 
-        const reviewResult = await fetchAllReviews(page, {
+        const fetchOpts = {
           maxReviews,
           pageSize: CONFIG.pageSize,
           delayMs: CONFIG.delayMs,
@@ -592,7 +592,34 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
               message: null,
             });
           },
-        });
+        };
+        let reviewResult = await fetchAllReviews(page, fetchOpts);
+
+        // Loading a place fires a preview call that answers with five reviews
+        // and no continuation token; when that is what got replayed the place
+        // finishes far short on an otherwise clean stop. A fresh page load and
+        // a second ask return the full set, so retry once and keep whichever
+        // attempt saw more. Only low-coverage results qualify, which bounds the
+        // extra work to places that were going to be wrong anyway.
+        if (
+          reviewResult.detectedCount &&
+          reviewResult.reviews.length < reviewResult.detectedCount * 0.5 &&
+          !reviewResult.blocked
+        ) {
+          log(`  Only ${reviewResult.reviews.length}/${reviewResult.detectedCount} on a clean stop, reloading and retrying once`);
+          try {
+            await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
+            await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(2000);
+            const retryResult = await fetchAllReviews(page, fetchOpts);
+            if (retryResult.reviews.length > reviewResult.reviews.length) {
+              log(`  Retry recovered ${retryResult.reviews.length}/${retryResult.detectedCount}`);
+              reviewResult = retryResult;
+            }
+          } catch (e) {
+            log(`  Retry failed, keeping first attempt: ${String(e.message || e).slice(0, 80)}`);
+          }
+        }
 
         // Clean up partial file (data is now in reviewResult.reviews)
         try { fs.unlinkSync(partialFile); } catch (e) {}
