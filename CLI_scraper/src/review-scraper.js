@@ -606,8 +606,18 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
           reviewResult.reviews.length < reviewResult.detectedCount * 0.5 &&
           !reviewResult.blocked
         ) {
-          log(`  Only ${reviewResult.reviews.length}/${reviewResult.detectedCount} on a clean stop, reloading and retrying once`);
+          log(`  Only ${reviewResult.reviews.length}/${reviewResult.detectedCount} on a clean stop, retrying in a fresh context`);
           try {
+            // A reload alone is not enough — the stub persists for the life of
+            // the browser context. A brand new context asks cleanly and returns
+            // the full set, which is what the isolated reproductions showed.
+            await page.close().catch(() => {});
+            await context.close().catch(() => {});
+            const fresh = await stealth.createStealthContext(browser, {});
+            context = fresh.context;
+            page = fresh.page;
+            await page.goto(`https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${pid}`, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
+            await page.waitForTimeout(2000);
             await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
             await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
             await page.waitForTimeout(2000);
