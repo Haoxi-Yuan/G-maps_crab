@@ -201,8 +201,12 @@ async function fetchAllReviews(page, opts = {}) {
 
   const requestHandler = (req) => {
     const u = req.url();
-    if (capturedUrl) return;
     if (!u.includes('rpcids=' + REVIEW_RPC_ID)) return;
+    // Keep the most recent request rather than the first. Loading a place fires
+    // a preview call that answers with five reviews and no continuation token;
+    // replaying that one caps the place at five however many it actually has.
+    // The Reviews tab click fires the real feed request afterwards, so last
+    // wins — which is what the GET-era fetcher did.
     capturedUrl = u;
     capturedBody = req.postData() || '';
     // Google now enforces per-request anti-bot headers on the batchexecute
