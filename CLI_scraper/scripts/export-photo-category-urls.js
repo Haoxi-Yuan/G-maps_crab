@@ -13,6 +13,10 @@
  * Usage:
  *   node scripts/export-photo-category-urls.js --db DB --label Menu --out list.tsv
  *   [--categories-like 'restaurant,cafe']   restrict by businesses.main_category
+ *   [--size s0]                             size suffix to request; s0 is the
+ *                                           original upload. The stored URL asks
+ *                                           for a ~203 px thumbnail, roughly
+ *                                           1/112 the bytes of the original.
  */
 
 const crypto = require('crypto');
@@ -26,6 +30,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--label') args.label = argv[++i];
     else if (argv[i] === '--out') args.out = argv[++i];
     else if (argv[i] === '--categories-like') args.categoriesLike = argv[++i];
+    else if (argv[i] === '--size') args.size = argv[++i];
     else throw new Error(`Unknown argument: ${argv[i]}`);
   }
   if (!args.db || !args.out) throw new Error('--db and --out are required');
@@ -68,14 +73,16 @@ function main() {
       if (seen.has(base)) continue;
       seen.add(base);
       written++;
-      out.write(`${sha16(base)}\t${p.url}\n`);
+      // Name by the base so a re-export at a different size lines up with the
+      // previous run, but fetch at the requested size.
+      out.write(`${sha16(base)}\t${args.size ? `${base}=${args.size}` : p.url}\n`);
     }
   }
   out.end();
   db.close();
   console.log(JSON.stringify({
-    label: args.label, categoryRows: categories, photoEntries: photos,
-    videosSkipped: videos, uniqueUrls: written, out: args.out,
+    label: args.label, size: args.size || 'as-stored', categoryRows: categories,
+    photoEntries: photos, videosSkipped: videos, uniqueUrls: written, out: args.out,
   }));
 }
 
