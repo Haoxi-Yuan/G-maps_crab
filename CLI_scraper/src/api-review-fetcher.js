@@ -68,9 +68,16 @@ function parseBatchexecuteResponse(text, rpcServicePath = '/MapsUgcPostService.L
     let envelope;
     try { envelope = JSON.parse(text.slice(startIdx, end)); }
     catch { pos = startIdx + 1; continue; }
-    // envelope = [["wrb.fr","<service>","<inner-as-string>",null,null,null,"generic"], ...]
+    // envelope = [["wrb.fr","<id>","<inner-as-string>",null,null,null,"generic"], ...]
+    //
+    // The second slot is either the full service path or the short rpcid. Both
+    // shapes come back for the same request — roughly a tenth of responses use
+    // the rpcid — and matching only the path silently dropped those places with
+    // zero reviews under stop:parse_failure, even though the body held a
+    // complete review page.
     for (const entry of envelope) {
-      if (Array.isArray(entry) && entry[0] === 'wrb.fr' && entry[1] === rpcServicePath) {
+      if (Array.isArray(entry) && entry[0] === 'wrb.fr'
+          && (entry[1] === rpcServicePath || entry[1] === REVIEW_RPC_ID)) {
         try { return JSON.parse(entry[2]); } catch { return null; }
       }
     }
