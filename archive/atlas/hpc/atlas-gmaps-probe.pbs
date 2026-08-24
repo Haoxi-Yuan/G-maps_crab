@@ -1,0 +1,75 @@
+#!/bin/bash
+#PBS -N gmaps_probe
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=01:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+mkdir -p "$BASE/images" "$BASE/cache/singularity" "$BASE/pbs_logs"
+
+export SINGULARITY_CACHEDIR="$BASE/cache/singularity"
+export SINGULARITY_TMPDIR="/tmp/haoxi.yuan-singularity-${PBS_JOBID:-manual}"
+mkdir -p "$SINGULARITY_TMPDIR"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+
+if [ ! -s "$SIF" ]; then
+  singularity pull "$SIF" docker://mcr.microsoft.com/playwright:v1.57.0-noble
+fi
+
+singularity exec -B /hpctmp:/hpctmp -B /tmp:/tmp "$SIF" bash -lc "
+  set -Eeuo pipefail
+  cd '$PROJECT'
+  export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+  export TMPDIR='$SINGULARITY_TMPDIR/browser'
+  mkdir -p \"\$TMPDIR\"
+  if [ ! -d node_modules/playwright ]; then
+    npm ci --ignore-scripts --no-audit --no-fund
+  else
+    npm ls playwright --depth=0
+  fi
+  node - <<'NODE'
+const { chromium } = require('playwright');
+const concurrency = Number(process.env.PROBE_CONCURRENCY || 12);
+
+async function one(i) {
+  const started = Date.now();
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-dev-shm-usage', '--disk-cache-size=1'],
+  });
+  try {
+    const page = await browser.newPage({ locale: 'en-SG' });
+    const response = await page.goto(
+      'https://www.google.com/maps/search/park/@1.3521,103.8198,12z?hl=en',
+      { waitUntil: 'domcontentloaded', timeout: 45000 },
+    );
+    const title = await page.title();
+    const body = (await page.locator('body').innerText({ timeout: 15000 })).slice(0, 2000);
+    const blocked = /unusual traffic|captcha|automated queries|sorry\/index/i.test(body + page.url());
+    return { i, ok: Boolean(response) && response.status() < 500 && !blocked,
+      status: response && response.status(), blocked, title, url: page.url(), ms: Date.now() - started };
+  } catch (error) {
+    return { i, ok: false, error: String(error.message || error), ms: Date.now() - started };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+(async () => {
+  const ip = await fetch('https://api.ipify.org').then((r) => r.text()).catch((e) => 'ERROR:' + e.message);
+  console.log(JSON.stringify({ event: 'environment', node: process.version, ip }));
+  const results = await Promise.all(Array.from({ length: concurrency }, (_, i) => one(i + 1)));
+  for (const result of results) console.log(JSON.stringify(result));
+  const passed = results.filter((x) => x.ok).length;
+  console.log(JSON.stringify({ event: 'summary', passed, total: results.length }));
+  if (passed !== results.length) process.exit(2);
+})().catch((error) => { console.error(error); process.exit(1); });
+NODE
+"

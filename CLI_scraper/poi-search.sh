@@ -331,6 +331,7 @@ const api = require('./src/poi-searcher-api');
         minCellSizeKm: ${MIN_CELL},
         saveInterval: ${SAVE_INTERVAL},
         incrementalSaveFile: '${OUTPUT_FILE}',
+        liveStatusFile: '${OUTPUT_FILE%.json}.live.json',
         boundaryFile: '${BOUNDARY_FILE}',
         selfAdapt: ${SELF_ADAPT},
         saMaxQueries: ${SA_MAX_QUERIES},

@@ -48,6 +48,7 @@ const CONFIG = {
   maxRetries: 2,
   retryDelayMs: 5000,
   requestTimeoutMs: 45000,
+  captureTimeoutMs: 45000,
 
   saveInterval: 20,
   enableOffsetGrid: true,      // Second pass with half-step offset
@@ -134,6 +135,25 @@ function pointsToBBox(points, paddingKm = 0.5) {
 // pb= template capture
 // ============================================
 
+async function withDeadline(promise, timeoutMs, label, onTimeout) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (onTimeout) onTimeout();
+          const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+          error.code = 'OPERATION_TIMEOUT';
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function capturePbTemplate(page, query, lat, lng, options = {}) {
   let capturedPb = null;
   const handler = (req) => {
@@ -145,15 +165,30 @@ async function capturePbTemplate(page, query, lat, lng, options = {}) {
   };
   page.on('request', handler);
   try {
-    await page.goto(`https://www.google.com/maps/search/${encodeURIComponent(query)}/@${lat},${lng},14z`, {
-      waitUntil: 'domcontentloaded',
-      timeout: options.navigationTimeoutMs ?? 30000,
-    });
-    await page.waitForTimeout(options.postNavigationWaitMs ?? 5000);
+    const capture = (async () => {
+      await page.goto(
+        `https://www.google.com/maps/search/${encodeURIComponent(query)}/@${lat},${lng},14z`,
+        { waitUntil: 'domcontentloaded', timeout: options.navigationTimeoutMs ?? 30000 },
+      );
+      await page.waitForTimeout(options.postNavigationWaitMs ?? 5000);
+    })();
+    await withDeadline(
+      capture,
+      options.captureTimeoutMs ?? CONFIG.captureTimeoutMs,
+      'pb template capture',
+      () => page.close().catch(() => {}),
+    );
+  } catch (error) {
+    if (!error.code) error.code = 'PB_CAPTURE_FAILED';
+    throw error;
   } finally {
     page.off('request', handler);
   }
-  if (!capturedPb) throw new Error('Failed to capture pb= template');
+  if (!capturedPb) {
+    const error = new Error('Failed to capture pb= template');
+    error.code = 'PB_CAPTURE_FAILED';
+    throw error;
+  }
   return capturedPb;
 }
 
@@ -181,7 +216,6 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
   // loop in fetchCellPaginated can decide what to do — and so a single
   // browser death doesn't crash the whole scrape.
   let result;
-  let evaluationWatchdog;
   try {
     const requestTimeoutMs = options.requestTimeoutMs ?? CONFIG.requestTimeoutMs;
     const evaluation = page.evaluate(async ({ fetchUrl, timeoutMs }) => {
@@ -189,17 +223,19 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const resp = await fetch(fetchUrl, { credentials: 'include', signal: controller.signal });
-      if (!resp.ok) return { error: `http_${resp.status}`, httpStatus: resp.status, structureComplete: false, places: [] };
+      if (!resp.ok) return { error: `http_${resp.status}`, places: [] };
       const text = await resp.text();
-      const idx = text.indexOf('[');
-      if (idx < 0) return { error: 'no_json', httpStatus: resp.status, structureComplete: false, places: [] };
-      const data = JSON.parse(text.substring(idx));
-      // Keep "an empty result" distinct from a damaged/throttled response.
-      // A missing/non-array result slot is not accepted as an empty tile.
-      const structureComplete = Array.isArray(data) && Array.isArray(data[64]);
-      if (!structureComplete) {
-        return { error: 'incomplete_response_structure', httpStatus: resp.status, structureComplete: false, places: [] };
+      if (/unusual traffic|captcha|automated queries|consent\.google|sorry\/index/i.test(`${resp.url}\n${text.slice(0, 5000)}`)) {
+        return { error: 'blocked_response', places: [] };
       }
+      const idx = text.indexOf('[');
+      if (idx < 0) return { error: 'no_json', places: [] };
+      const data = JSON.parse(text.substring(idx));
+      if (!Array.isArray(data)) return { error: 'unexpected_response_structure', places: [] };
+      // Google omits slot 64 at a valid empty/end-of-pagination response.
+      // A present non-array slot is a schema change and must remain retryable.
+      if (data[64] == null) return { places: [] };
+      if (!Array.isArray(data[64])) return { error: 'unexpected_response_structure', places: [] };
       const rawPlaces = data[64];
       const places = [];
       for (const item of rawPlaces) {
@@ -410,38 +446,25 @@ async function fetchPage(page, query, lat, lng, altitude, pbTemplate, offset = 0
           plusCode: null,
         });
       }
-      return { places, httpStatus: resp.status, structureComplete: true };
+      return { places };
     } catch (e) {
-      const code = e && e.name === 'AbortError' ? 'request_timeout' : `fetch_failed:${e && e.message || e}`;
-      return { error: code, structureComplete: false, places: [] };
+      return { error: e && e.name === 'AbortError' ? 'request_timeout' : `fetch_failed:${e.message}`, places: [] };
     } finally {
       clearTimeout(timeout);
     }
     }, { fetchUrl: url, timeoutMs: requestTimeoutMs });
-    const outerTimeoutMs = Math.ceil(requestTimeoutMs * 1.25);
-    const watchdog = new Promise((_, reject) => {
-      evaluationWatchdog = setTimeout(() => {
-        const error = new Error(`page.evaluate made no progress for ${outerTimeoutMs}ms`);
-        error.code = 'EVALUATION_STALLED';
-        reject(error);
-      }, outerTimeoutMs);
-    });
-    result = await Promise.race([evaluation, watchdog]);
+    result = await withDeadline(
+      evaluation,
+      Math.ceil(requestTimeoutMs * 1.25),
+      'map fetch',
+      () => page.close().catch(() => {}),
+    );
   } catch (e) {
-    if (e && e.code === 'EVALUATION_STALLED') {
-      // A renderer can be wedged so deeply that its in-page AbortController
-      // never fires. Close the page asynchronously so the owning worker can
-      // restart the session; never let one tile hold a process indefinitely.
-      page.close().catch(() => {});
-      return { error: 'evaluate_stalled', structureComplete: false, places: [] };
-    }
     const msg = String(e && e.message || '');
     if (/Target page, context or browser has been closed|Browser has been closed|Execution context was destroyed|page has been closed/i.test(msg)) {
-      return { error: 'browser_closed', structureComplete: false, places: [] };
+      return { error: 'browser_closed', places: [] };
     }
-    return { error: 'evaluate_failed:' + msg.substring(0, 80), structureComplete: false, places: [] };
-  } finally {
-    clearTimeout(evaluationWatchdog);
+    return { error: `${e && e.code === 'OPERATION_TIMEOUT' ? 'evaluate_stalled' : 'evaluate_failed'}:${msg.substring(0, 80)}`, places: [] };
   }
   return result;
 }
@@ -456,10 +479,6 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
   const placeWriter = opts._placeWriter || null;
   const newIds = [];
   let lastPageFull = false;
-  let paginationComplete = true;
-  let responseStructureComplete = true;
-  let fetchError = null;
-  let pagesFetched = 0;
 
   for (let pageNum = 0; pageNum < maxPages; pageNum++) {
     const offset = pageNum * CONFIG.pageSize;
@@ -476,18 +495,15 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
 
     if (result.error) {
       stats.errors++;
-      paginationComplete = false;
-      responseStructureComplete = false;
-      fetchError = result.error;
-      break;
+      const error = new Error(`Map fetch failed for "${query}" at ${lat},${lng}, offset ${offset}: ${result.error}`);
+      error.code = 'MAP_FETCH_FAILED';
+      error.fetchError = result.error;
+      throw error;
     }
-    pagesFetched++;
-    responseStructureComplete = responseStructureComplete && result.structureComplete === true;
     if (result.places.length === 0) break;
 
     // Collect new IDs and stream-write fresh records (first occurrence wins,
     // matching prior placeStore semantics — duplicates within a run are dropped).
-    let newThisPage = 0;
     for (const place of result.places) {
       // In-boundary test (uses the same buffered boundary as the post-filter).
       // With no boundary loaded (whole-city runs) every place counts as in.
@@ -502,7 +518,6 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
         globalIds.add(place.ftid);
         newIds.push(place.ftid);
         stats.totalIds++;
-        newThisPage++;
         if (inBoundary && opts._inBoundaryCounter) opts._inBoundaryCounter.count++;
         if (placeWriter) placeWriter.writeRecord(place, place.ftid);
       }
@@ -510,33 +525,13 @@ async function fetchCellPaginated(page, query, lat, lng, altitude, pbTemplate, g
 
     lastPageFull = result.places.length >= CONFIG.pageSize;
 
-    // If this page had zero new IDs, stop paginating (all dupes)
-    if (newThisPage === 0) break;
     // If page not full, we've reached the end
     if (!lastPageFull) break;
 
     if (pageNum < maxPages - 1) await page.waitForTimeout(delayMs);
   }
 
-  return {
-    newIds,
-    lastPageFull,
-    paginationComplete,
-    responseStructureComplete,
-    fetchError,
-    pagesFetched,
-  };
-}
-
-class PaginationIncompleteError extends Error {
-  constructor(query, bbox, fetchError) {
-    super(`Pagination incomplete for "${query}" at ${bbox.centerLat},${bbox.centerLng}: ${fetchError}`);
-    this.name = 'PaginationIncompleteError';
-    this.code = 'PAGINATION_INCOMPLETE';
-    this.query = query;
-    this.bbox = bbox;
-    this.fetchError = fetchError;
-  }
+  return { newIds, lastPageFull };
 }
 
 // ============================================
@@ -549,6 +544,7 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
   const delayMs = opts.requestDelayMs ?? CONFIG.requestDelayMs;
   const onProgress = opts.onProgress || null;
   const boundaryCheck = opts._boundaryCheck || null;
+  const onCellEvent = opts._onCellEvent || null;
 
   // Skip cells whose center is outside the boundary (saves ~30% requests for border cities).
   // Center-only testing is wrong for concave or disjoint boundaries: a coarse
@@ -569,13 +565,16 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
 
   const zoom = cellSizeToZoom(bbox.sizeKm);
   const altitude = calculateAltitude(zoom, bbox.centerLat);
+  if (onCellEvent) onCellEvent({
+    phase: 'enter', query, depth, zoom, bbox,
+    totalPlaceIds: globalIds.size, requests: stats.requests,
+  });
 
   // Step 1: Paginate this cell fully
-  const { newIds, lastPageFull, paginationComplete, fetchError } = await fetchCellPaginated(
+  const { newIds, lastPageFull } = await fetchCellPaginated(
     page, query, bbox.centerLat, bbox.centerLng, altitude, pbTemplate,
     globalIds, stats, opts
   );
-  if (!paginationComplete) throw new PaginationIncompleteError(query, bbox, fetchError);
 
   const indent = '  '.repeat(Math.min(depth, 4));
   const cellLabel = `${indent}[d${depth}] (${bbox.centerLat.toFixed(4)},${bbox.centerLng.toFixed(4)}) ${bbox.sizeKm.toFixed(2)}km z${zoom}`;
@@ -583,22 +582,36 @@ async function searchCell(page, query, bbox, pbTemplate, globalIds, stats, depth
   // Step 2: Decide whether to subdivide
   // Subdivide if: pagination hit the limit (last page was full) AND we can go deeper
   const canSubdivide = depth < maxDepth && bbox.sizeKm / 2 >= minCell;
-  const shouldSubdivide = lastPageFull && canSubdivide && newIds.length > 0;
+  // Resume may make every ID in the parent cell a duplicate. Saturation, not
+  // novelty, decides whether child cells still need to be visited.
+  const shouldSubdivide = lastPageFull && canSubdivide;
 
   if (shouldSubdivide) {
     if (onProgress && depth <= 3) onProgress(stats, `${cellLabel}: +${newIds.length} (paginated) → subdividing`);
 
     const quads = subdivideBBox(bbox);
+    if (onCellEvent) onCellEvent({
+      phase: 'subdivide', query, depth, zoom, bbox, children: quads,
+      newPlaceIds: newIds.length, totalPlaceIds: globalIds.size, requests: stats.requests,
+    });
     for (const quad of quads) {
       await page.waitForTimeout(delayMs);
       const subIds = await searchCell(page, query, quad, pbTemplate, globalIds, stats, depth + 1, opts);
       newIds.push(...subIds);
     }
+    if (onCellEvent) onCellEvent({
+      phase: 'leave', query, depth, zoom, bbox,
+      newPlaceIds: newIds.length, totalPlaceIds: globalIds.size, requests: stats.requests,
+    });
   } else {
     const reason = newIds.length === 0 ? 'no_new' : !lastPageFull ? 'complete' : !canSubdivide ? 'min_cell' : 'done';
     if (onProgress && newIds.length > 0) {
       onProgress(stats, `${cellLabel}: +${newIds.length} ✓ [${reason}]`);
     }
+    if (onCellEvent) onCellEvent({
+      phase: 'complete', query, depth, zoom, bbox, reason,
+      newPlaceIds: newIds.length, totalPlaceIds: globalIds.size, requests: stats.requests,
+    });
   }
 
   return newIds;
@@ -641,18 +654,20 @@ async function runOffsetGrid(page, query, bbox, pbTemplate, globalIds, stats, op
         if (!cellHasSeed) continue;
       }
 
-      const pageResult = await fetchCellPaginated(
+      if (opts._onCellEvent) opts._onCellEvent({
+        phase: 'offset', query, depth: 0, zoom,
+        bbox: {
+          minLat: lat - offsetLat, maxLat: lat + offsetLat,
+          minLng: lng - offsetLng, maxLng: lng + offsetLng,
+          centerLat: lat, centerLng: lng, sizeKm: cellSizeKm,
+        },
+        totalPlaceIds: globalIds.size, requests: stats.requests,
+      });
+
+      const { newIds } = await fetchCellPaginated(
         page, query, lat, lng, altitude, pbTemplate,
         globalIds, stats, opts
       );
-      if (!pageResult.paginationComplete) {
-        throw new PaginationIncompleteError(query, {
-          centerLat: lat,
-          centerLng: lng,
-          sizeKm: cellSizeKm,
-        }, pageResult.fetchError);
-      }
-      const { newIds } = pageResult;
       cellCount++;
       if (newIds.length > 0 && onProgress) {
         onProgress(stats, `  [offset] (${lat.toFixed(4)},${lng.toFixed(4)}): +${newIds.length} new`);
@@ -677,6 +692,38 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
   const placesFile = incrementalSaveFile
     ? incrementalSaveFile.replace(/[^/]+$/, 'places.ndjson')
     : null;
+  const liveStatusFile = options.liveStatusFile || (incrementalSaveFile
+    ? incrementalSaveFile.replace(/\.json$/, '.live.json')
+    : null);
+  const city = incrementalSaveFile ? require('path').basename(require('path').dirname(incrementalSaveFile)) : null;
+  let liveState = {
+    version: 1, pipeline: 'poi-search', city, phase: 'starting',
+    categoryTotal: categories.length, updatedAt: new Date().toISOString(),
+  };
+  let liveTimer = null;
+  let liveLastWrite = 0;
+  const flushLiveStatus = () => {
+    liveTimer = null;
+    if (!liveStatusFile) return;
+    const tmp = `${liveStatusFile}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(liveState));
+      fs.renameSync(tmp, liveStatusFile);
+      liveLastWrite = Date.now();
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch (_) {}
+    }
+  };
+  const writeLiveStatus = (patch, force = false) => {
+    liveState = { ...liveState, ...patch, updatedAt: new Date().toISOString() };
+    if (!liveStatusFile) return;
+    if (force || Date.now() - liveLastWrite >= 250) {
+      if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+      flushLiveStatus();
+    } else if (!liveTimer) {
+      liveTimer = setTimeout(flushLiveStatus, Math.max(1, 250 - (Date.now() - liveLastWrite)));
+    }
+  };
 
   // Resume support: only the per-category progress comes from poi_search.json;
   // place IDs are streamed from places.ndjson (single source of truth, avoids
@@ -709,6 +756,7 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
   console.log(`[QUADTREE] Center: ${bbox.centerLat.toFixed(4)}, ${bbox.centerLng.toFixed(4)}`);
   console.log(`[QUADTREE] Categories: ${categories.length}`);
   console.log(`[QUADTREE] Strategy: paginate (up to ${CONFIG.maxPaginationPages} pages) → subdivide if full → offset grid pass`);
+  writeLiveStatus({ phase: 'city-start', bbox, totalPlaceIds: allPlaceIds.size }, true);
 
   // Create browser context
   const stealth = (() => { try { return require('./stealth'); } catch (e) { return null; } })();
@@ -728,7 +776,7 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
   try {
     console.log(`[QUADTREE] Capturing pb template...`);
     const firstCategory = categories[0] || 'Restaurant';
-    const pbTemplate = await capturePbTemplate(page, firstCategory, bbox.centerLat, bbox.centerLng);
+    const pbTemplate = await capturePbTemplate(page, firstCategory, bbox.centerLat, bbox.centerLng, options);
     console.log(`[QUADTREE] pb template captured (${pbTemplate.length} chars)`);
 
     // Load boundary for pre-filtering cells
@@ -744,6 +792,11 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
     // is the discovery hook that feeds returned mainCategories back to the closure.
     const runOneQuery = async (query, catIndex, totalCategories, onCategory) => {
       console.log(`\n[QUADTREE] === Query ${catIndex}/${totalCategories}: ${query} ===`);
+      writeLiveStatus({
+        phase: 'query-start', category: query, categoryIndex: catIndex,
+        categoryTotal: totalCategories, depth: 0, zoom: cellSizeToZoom(bbox.sizeKm),
+        bbox, newPlaceIds: 0, totalPlaceIds: allPlaceIds.size,
+      }, true);
 
       const stats = { requests: 0, errors: 0, totalIds: 0 };
       const catStartIds = allPlaceIds.size;
@@ -766,7 +819,11 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       // Per-query in-boundary counter — the meaningful yield signal for bounded
       // areas (raw yield stays high from spread and never converges).
       const inBoundaryCounter = { count: 0 };
-      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter, _seedPoints: points, _onCategory: onCategory || null, _inBoundaryCounter: inBoundaryCounter };
+      const onCellEvent = (event) => writeLiveStatus({
+        ...event, category: query, categoryIndex: catIndex,
+        categoryTotal: totalCategories,
+      });
+      const cellOpts = { ...options, onProgress, _boundaryCheck: boundaryCheck, _placeWriter: placeWriter, _seedPoints: points, _onCategory: onCategory || null, _inBoundaryCounter: inBoundaryCounter, _onCellEvent: onCellEvent };
 
       // Phase 1: Quadtree with pagination
       await searchCell(page, query, bbox, pbTemplate, allPlaceIds, stats, 0, cellOpts);
@@ -784,6 +841,11 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       results.push({ category: query, newPlaceIds: catNewIds, inBoundaryNew, requests: stats.requests, errors: stats.errors, elapsed });
       console.log(`[QUADTREE] ${query}: +${catNewIds} new POIs (${inBoundaryNew} in-boundary) (${stats.requests} requests, ${elapsed}s)`);
       console.log(`[QUADTREE] Running total: ${allPlaceIds.size} unique POIs`);
+      writeLiveStatus({
+        phase: 'query-complete', category: query, categoryIndex: catIndex,
+        categoryTotal: totalCategories, newPlaceIds: catNewIds,
+        totalPlaceIds: allPlaceIds.size, requests: stats.requests, bbox,
+      }, true);
 
       // Save after each query
       savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, totalCategories);
@@ -809,12 +871,20 @@ async function batchSearchPOIs(browser, points, categories, options = {}, progre
       }
     }
 
+  } catch (error) {
+    writeLiveStatus({
+      phase: 'error', error: String(error && error.message || error),
+      totalPlaceIds: allPlaceIds.size, bbox,
+    }, true);
+    throw error;
   } finally {
+    if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; flushLiveStatus(); }
     try { await page.close(); } catch (_) {}
     try { await context.close(); } catch (_) {}
     try { await placeWriter.close(); } catch (_) {}
   }
 
+  writeLiveStatus({ phase: 'city-complete', totalPlaceIds: allPlaceIds.size, bbox }, true);
   return {
     totalPlaceIds: allPlaceIds.size,
     placesFile: placesFile || null,
@@ -910,16 +980,14 @@ function savePOIData(incrementalSaveFile, allPlaceIds, results, bbox, catIndex, 
   if (!incrementalSaveFile) return;
   const saveData = {
     timestamp: new Date().toISOString(),
-    progress: { categoriesDone: catIndex, totalCategories, currentCategory, requests },
+    progress: { categoriesDone: results.length, totalCategories, currentCategory, requests },
     totalPlaceIds: allPlaceIds.size,
     results,
     searchArea: { ...bbox },
   };
-  try {
-    const tmp = incrementalSaveFile + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(saveData, null, 2), 'utf8');
-    fs.renameSync(tmp, incrementalSaveFile);
-  } catch (e) {}
+  const tmp = incrementalSaveFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(saveData, null, 2), 'utf8');
+  fs.renameSync(tmp, incrementalSaveFile);
 }
 
 // ============================================
@@ -1067,7 +1135,5 @@ module.exports = {
   loadPointsFromCSV,
   loadPointsFromJSON,
   loadCategories,
-  formatPlaceRecord,
-  PaginationIncompleteError,
   CONFIG,
 };

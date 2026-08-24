@@ -25,6 +25,18 @@
 
 'use strict';
 
+// Neither page.evaluate nor an in-page fetch has a default timeout, so a
+// stalled ListEntityPhotos response wedges the whole worker: the photos phase
+// writes its sidecar once on entry and has no heartbeat, so the stall shows up
+// only as a process burning no CPU. One was measured stuck for 49 minutes on a
+// hawker centre, at 14 s of CPU against ~4 min for its siblings. Abort instead
+// and let the existing _error path close the category out.
+const PHOTO_FETCH_TIMEOUT_MS = Number(process.env.PHOTO_FETCH_TIMEOUT_MS) || 45000;
+
+// Same renderer-wedge guard the review fetcher uses: the in-page abort cannot
+// fire if the renderer is dead, so race page.evaluate in Node as well.
+const { evaluateWithTimeout, PageEvalTimeout } = require('./api-review-fetcher');
+
 // ============================================================
 // Parsing preview/place response
 // ============================================================
@@ -283,10 +295,14 @@ async function fetchPhotosForCategory(page, placeMeta, category, session, opts =
     maxPhotos = 5000,
     maxPages = 200,
     onProgress = null,
+    stopWhenPhotoIds = null,
   } = opts;
 
   const all = [];
   const seen = new Set();
+  const remainingPhotoIds = stopWhenPhotoIds
+    ? new Set(Array.from(stopWhenPhotoIds).filter(Boolean))
+    : null;
   let cursor = null;
   let totalCount = null;
   let reqId = (session.reqIdSeed || 100000) + Math.floor(Math.random() * 1e5);
@@ -306,16 +322,26 @@ async function fetchPhotosForCategory(page, placeMeta, category, session, opts =
 
     let respText;
     try {
-      respText = await page.evaluate(async ({ u, b }) => {
-        const r = await fetch(u, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-          body: b,
-          credentials: 'include',
-        });
-        if (!r.ok) return { _error: r.status };
-        return await r.text();
-      }, { u: url, b: body });
+      respText = await evaluateWithTimeout(page, async ({ u, b, timeoutMs }) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const r = await fetch(u, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+            body: b,
+            credentials: 'include',
+            signal: controller.signal,
+          });
+          if (!r.ok) return { _error: r.status };
+          return await r.text();
+        } catch (e) {
+          if (e && e.name === 'AbortError') return { _error: 'timeout' };
+          throw e;
+        } finally {
+          clearTimeout(timer);
+        }
+      }, { u: url, b: body, timeoutMs: PHOTO_FETCH_TIMEOUT_MS });
     } catch (e) {
       if (onProgress) onProgress({ category: category.label, error: e.message });
       break;
@@ -332,12 +358,14 @@ async function fetchPhotosForCategory(page, placeMeta, category, session, opts =
       if (seen.has(p.id)) continue;
       seen.add(p.id);
       all.push(p);
+      if (remainingPhotoIds) remainingPhotoIds.delete(p.id);
       added++;
       if (all.length >= maxPhotos) break;
     }
     if (onProgress) onProgress({ category: category.label, page: pageNum, added, total: all.length, expected: totalCount });
 
     if (added === 0) break;                          // no new photos this page
+    if (remainingPhotoIds && remainingPhotoIds.size === 0) break;
     if (!nextCursor) break;                          // no more pages
     if (all.length >= maxPhotos) break;
     if (totalCount != null && all.length >= totalCount) break;

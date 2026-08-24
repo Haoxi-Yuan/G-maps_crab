@@ -1,0 +1,1 @@
+capture/fetch-temporal-photometas.js

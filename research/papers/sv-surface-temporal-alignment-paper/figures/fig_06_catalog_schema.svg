@@ -1,0 +1,1443 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3980" height="3711" viewBox="0 0 3980 3711">
+<rect width="3980" height="3711" fill="#ffffff"/>
+
+<defs>
+  <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+    <path d="M2,2 L10,6 L2,10 z" fill="#64748b"/>
+  </marker>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+    <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#64748b" flood-opacity="0.18"/>
+  </filter>
+</defs>
+
+<text x="90.0" y="88.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="52" font-weight="850" fill="#111827" text-anchor="start">
+<tspan x="90.0" dy="0.0">f  DuckDB catalog schema with exact table fields</tspan>
+</text>
+<text x="92.0" y="136.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="92.0" dy="0.0">Large rasters remain as files; the catalog stores project-relative paths, geometry summaries, quality metrics and provenance keys.</tspan>
+</text>
+<rect x="90.0" y="185.0" width="1220.0" height="1238.0" rx="26.0" fill="#ffffff" fill-opacity="1.000" stroke="#1d4ed8" stroke-width="3.0"/>
+<rect x="90.0" y="185.0" width="1220.0" height="72.0" rx="26.0" fill="#1d4ed8" fill-opacity="0.100" stroke="#1d4ed8" stroke-width="0.0"/>
+<text x="118.0" y="233.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="31" font-weight="850" fill="#1d4ed8" text-anchor="start">
+<tspan x="118.0" dy="0.0">Raw Evidence</tspan>
+</text>
+<rect x="116.0" y="285.0" width="1168.0" height="228.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="323.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">spatial_runs  (1 rows)</tspan>
+</text>
+<text x="144.0" y="361.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">site_id</tspan>
+</text>
+<text x="144.0" y="387.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="413.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">source_url</tspan>
+</text>
+<text x="144.0" y="439.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">reference_lat</tspan>
+</text>
+<text x="144.0" y="465.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">pano_count</tspan>
+</text>
+<text x="144.0" y="491.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">distance_policy</tspan>
+</text>
+<text x="665.0" y="361.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">run_id</tspan>
+</text>
+<text x="665.0" y="387.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">run_dir</tspan>
+</text>
+<text x="665.0" y="413.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">reference_panoid</tspan>
+</text>
+<text x="665.0" y="439.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">reference_lng</tspan>
+</text>
+<text x="665.0" y="465.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">total_points</tspan>
+</text>
+<rect x="116.0" y="539.0" width="1168.0" height="254.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="577.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">raw_assets  (20145 rows)</tspan>
+</text>
+<text x="144.0" y="615.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">asset_id</tspan>
+</text>
+<text x="144.0" y="641.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">site_id</tspan>
+</text>
+<text x="144.0" y="667.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="693.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">stack_id</tspan>
+</text>
+<text x="144.0" y="719.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">asset_type</tspan>
+</text>
+<text x="144.0" y="745.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bytes</tspan>
+</text>
+<text x="144.0" y="771.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">source_url</tspan>
+</text>
+<text x="665.0" y="615.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">stage</tspan>
+</text>
+<text x="665.0" y="641.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">run_id</tspan>
+</text>
+<text x="665.0" y="667.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">anchor_panoid</tspan>
+</text>
+<text x="665.0" y="693.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">panoid</tspan>
+</text>
+<text x="665.0" y="719.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">relative_path</tspan>
+</text>
+<text x="665.0" y="745.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">sha256</tspan>
+</text>
+<text x="665.0" y="771.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">created_at</tspan>
+</text>
+<rect x="116.0" y="819.0" width="1168.0" height="280.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="857.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">temporal_batches  (1 rows)</tspan>
+</text>
+<text x="144.0" y="895.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">site_id</tspan>
+</text>
+<text x="144.0" y="921.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="947.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">batch_dir</tspan>
+</text>
+<text x="144.0" y="973.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">started_at</tspan>
+</text>
+<text x="144.0" y="999.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">target_count</tspan>
+</text>
+<text x="144.0" y="1025.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">skipped_existing_count</tspan>
+</text>
+<text x="144.0" y="1051.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">failed_count</tspan>
+</text>
+<text x="144.0" y="1077.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">photometa_count</tspan>
+</text>
+<text x="665.0" y="895.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">run_id</tspan>
+</text>
+<text x="665.0" y="921.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">batch_id</tspan>
+</text>
+<text x="665.0" y="947.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">manifest_path</tspan>
+</text>
+<text x="665.0" y="973.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">finished_at</tspan>
+</text>
+<text x="665.0" y="999.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">ok_count</tspan>
+</text>
+<text x="665.0" y="1025.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">no_timeline_captures_count</tspan>
+</text>
+<text x="665.0" y="1051.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">timeline_captures</tspan>
+</text>
+<text x="665.0" y="1077.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">strategy_json</tspan>
+</text>
+<rect x="116.0" y="1125.0" width="1168.0" height="228.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="1163.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">tile_requests  (26 rows)</tspan>
+</text>
+<text x="144.0" y="1201.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">site_id</tspan>
+</text>
+<text x="144.0" y="1227.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="1253.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">zoom</tspan>
+</text>
+<text x="144.0" y="1279.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">y</tspan>
+</text>
+<text x="144.0" y="1305.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">cb_client</tspan>
+</text>
+<text x="144.0" y="1331.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">fover</tspan>
+</text>
+<text x="665.0" y="1201.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">run_id</tspan>
+</text>
+<text x="665.0" y="1227.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">panoid</tspan>
+</text>
+<text x="665.0" y="1253.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">x</tspan>
+</text>
+<text x="665.0" y="1279.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">url</tspan>
+</text>
+<text x="665.0" y="1305.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">nbt</tspan>
+</text>
+<rect x="1380.0" y="185.0" width="1220.0" height="1238.0" rx="26.0" fill="#ffffff" fill-opacity="1.000" stroke="#15803d" stroke-width="3.0"/>
+<rect x="1380.0" y="185.0" width="1220.0" height="72.0" rx="26.0" fill="#15803d" fill-opacity="0.100" stroke="#15803d" stroke-width="0.0"/>
+<text x="1408.0" y="233.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="31" font-weight="850" fill="#15803d" text-anchor="start">
+<tspan x="1408.0" dy="0.0">Pano, POI, SVI Topology</tspan>
+</text>
+<rect x="1406.0" y="285.0" width="1168.0" height="332.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="323.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">pano_observations  (52 rows)</tspan>
+</text>
+<text x="1434.0" y="361.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">site_id</tspan>
+</text>
+<text x="1434.0" y="387.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1434.0" y="413.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">pano_idx</tspan>
+</text>
+<text x="1434.0" y="439.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">lng</tspan>
+</text>
+<text x="1434.0" y="465.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">north_m</tspan>
+</text>
+<text x="1434.0" y="491.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">is_reference</tspan>
+</text>
+<text x="1434.0" y="517.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">n_points</tspan>
+</text>
+<text x="1434.0" y="543.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">b2_unique_ids</tspan>
+</text>
+<text x="1434.0" y="569.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">photometa_path</tspan>
+</text>
+<text x="1434.0" y="595.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">pointcloud_meta_path</tspan>
+</text>
+<text x="1955.0" y="361.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">run_id</tspan>
+</text>
+<text x="1955.0" y="387.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1955.0" y="413.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">lat</tspan>
+</text>
+<text x="1955.0" y="439.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">east_m</tspan>
+</text>
+<text x="1955.0" y="465.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">up_m</tspan>
+</text>
+<text x="1955.0" y="491.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">n_planes</tspan>
+</text>
+<text x="1955.0" y="517.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">effective_max_distance_m</tspan>
+</text>
+<text x="1955.0" y="543.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">panorama_path</tspan>
+</text>
+<text x="1955.0" y="569.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">parsed_path</tspan>
+</text>
+<rect x="1406.0" y="643.0" width="1168.0" height="254.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="681.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">visible_pois  (187 rows)</tspan>
+</text>
+<text x="1434.0" y="719.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">site_id</tspan>
+</text>
+<text x="1434.0" y="745.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1434.0" y="771.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">poi_ref_type</tspan>
+</text>
+<text x="1434.0" y="797.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">ftid_0</tspan>
+</text>
+<text x="1434.0" y="823.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">name</tspan>
+</text>
+<text x="1434.0" y="849.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">icon_url</tspan>
+</text>
+<text x="1434.0" y="875.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">source_field</tspan>
+</text>
+<text x="1955.0" y="719.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">run_id</tspan>
+</text>
+<text x="1955.0" y="745.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1955.0" y="771.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">place_id</tspan>
+</text>
+<text x="1955.0" y="797.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">ftid_1</tspan>
+</text>
+<text x="1955.0" y="823.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">category</tspan>
+</text>
+<text x="1955.0" y="849.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_index</tspan>
+</text>
+<rect x="1406.0" y="923.0" width="1168.0" height="306.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="961.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">b2_regions  (4139 rows)</tspan>
+</text>
+<text x="1434.0" y="999.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1434.0" y="1025.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">run_id</tspan>
+</text>
+<text x="1434.0" y="1051.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">b2_id</tspan>
+</text>
+<text x="1434.0" y="1077.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">centroid_col</tspan>
+</text>
+<text x="1434.0" y="1103.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">centroid_heading_deg</tspan>
+</text>
+<text x="1434.0" y="1129.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">target_east_m</tspan>
+</text>
+<text x="1434.0" y="1155.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">target_heading_deg</tspan>
+</text>
+<text x="1434.0" y="1181.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">target_error_deg</tspan>
+</text>
+<text x="1434.0" y="1207.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">b2_grid_path</tspan>
+</text>
+<text x="1955.0" y="999.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">site_id</tspan>
+</text>
+<text x="1955.0" y="1025.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1955.0" y="1051.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">cell_count</tspan>
+</text>
+<text x="1955.0" y="1077.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">centroid_row</tspan>
+</text>
+<text x="1955.0" y="1103.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">target_panoid</tspan>
+</text>
+<text x="1955.0" y="1129.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">target_north_m</tspan>
+</text>
+<text x="1955.0" y="1155.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">target_distance_m</tspan>
+</text>
+<text x="1955.0" y="1181.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">mapping_method</tspan>
+</text>
+<text x="1955.0" y="1207.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">parsed_path</tspan>
+</text>
+<rect x="2670.0" y="185.0" width="1220.0" height="1238.0" rx="26.0" fill="#ffffff" fill-opacity="1.000" stroke="#ea580c" stroke-width="3.0"/>
+<rect x="2670.0" y="185.0" width="1220.0" height="72.0" rx="26.0" fill="#ea580c" fill-opacity="0.100" stroke="#ea580c" stroke-width="0.0"/>
+<text x="2698.0" y="233.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="31" font-weight="850" fill="#ea580c" text-anchor="start">
+<tspan x="2698.0" dy="0.0">Parsed Geometry</tspan>
+</text>
+<rect x="2696.0" y="285.0" width="1168.0" height="332.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="323.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">parsed_photometa  (80 rows)</tspan>
+</text>
+<text x="2724.0" y="361.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">site_id</tspan>
+</text>
+<text x="2724.0" y="387.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="2724.0" y="413.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">parsed_path</tspan>
+</text>
+<text x="2724.0" y="439.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">indexmap_path</tspan>
+</text>
+<text x="2724.0" y="465.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">b2_grid_path</tspan>
+</text>
+<text x="2724.0" y="491.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">map_width</tspan>
+</text>
+<text x="2724.0" y="517.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">has_indexmap</tspan>
+</text>
+<text x="2724.0" y="543.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">has_b2</tspan>
+</text>
+<text x="2724.0" y="569.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">pitch_deg</tspan>
+</text>
+<text x="2724.0" y="595.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">capture_year</tspan>
+</text>
+<text x="3245.0" y="361.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">run_id</tspan>
+</text>
+<text x="3245.0" y="387.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">panoid</tspan>
+</text>
+<text x="3245.0" y="413.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">planes_path</tspan>
+</text>
+<text x="3245.0" y="439.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">depthmap_path</tspan>
+</text>
+<text x="3245.0" y="465.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">n_planes</tspan>
+</text>
+<text x="3245.0" y="491.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">map_height</tspan>
+</text>
+<text x="3245.0" y="517.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">has_depthmap</tspan>
+</text>
+<text x="3245.0" y="543.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">heading_deg</tspan>
+</text>
+<text x="3245.0" y="569.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">roll_deg</tspan>
+</text>
+<text x="3245.0" y="595.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">capture_month</tspan>
+</text>
+<rect x="2696.0" y="643.0" width="1168.0" height="410.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="681.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">indexmap_rectification  (74 rows)</tspan>
+</text>
+<text x="2724.0" y="719.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="2724.0" y="745.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">run_id</tspan>
+</text>
+<text x="2724.0" y="771.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">kept</tspan>
+</text>
+<text x="2724.0" y="797.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">n_planes</tspan>
+</text>
+<text x="2724.0" y="823.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">roll_deg</tspan>
+</text>
+<text x="2724.0" y="849.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">horizon_amp_gravity_px</tspan>
+</text>
+<text x="2724.0" y="875.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">align_score</tspan>
+</text>
+<text x="2724.0" y="901.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">n_edge_pixels</tspan>
+</text>
+<text x="2724.0" y="927.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">edge_align_score</tspan>
+</text>
+<text x="2724.0" y="953.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">sky_corr_strength</tspan>
+</text>
+<text x="2724.0" y="979.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">local_indexmap_path</tspan>
+</text>
+<text x="2724.0" y="1005.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">compare_path</tspan>
+</text>
+<text x="2724.0" y="1031.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">overlay_path</tspan>
+</text>
+<text x="3245.0" y="719.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">site_id</tspan>
+</text>
+<text x="3245.0" y="745.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">panoid</tspan>
+</text>
+<text x="3245.0" y="771.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">reason</tspan>
+</text>
+<text x="3245.0" y="797.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">pitch_off_deg</tspan>
+</text>
+<text x="3245.0" y="823.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">horizon_amp_local_px</tspan>
+</text>
+<text x="3245.0" y="849.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">shift_px</tspan>
+</text>
+<text x="3245.0" y="875.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">zero_shift_score</tspan>
+</text>
+<text x="3245.0" y="901.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">edge_shift_px</tspan>
+</text>
+<text x="3245.0" y="927.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">sky_shift_px</tspan>
+</text>
+<text x="3245.0" y="953.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">method</tspan>
+</text>
+<text x="3245.0" y="979.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">gravity_indexmap_path</tspan>
+</text>
+<text x="3245.0" y="1005.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">with_pano_path</tspan>
+</text>
+<rect x="2696.0" y="1079.0" width="1168.0" height="332.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="1117.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">plane_observations  (8314 rows)</tspan>
+</text>
+<text x="2724.0" y="1155.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="2724.0" y="1181.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">run_id</tspan>
+</text>
+<text x="2724.0" y="1207.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="2724.0" y="1233.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">class</tspan>
+</text>
+<text x="2724.0" y="1259.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">local_ny</tspan>
+</text>
+<text x="2724.0" y="1285.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">local_d</tspan>
+</text>
+<text x="2724.0" y="1311.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">world_ny</tspan>
+</text>
+<text x="2724.0" y="1337.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">world_d</tspan>
+</text>
+<text x="2724.0" y="1363.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">pitch_deg</tspan>
+</text>
+<text x="2724.0" y="1389.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">roll_deg</tspan>
+</text>
+<text x="3245.0" y="1155.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">site_id</tspan>
+</text>
+<text x="3245.0" y="1181.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">panoid</tspan>
+</text>
+<text x="3245.0" y="1207.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">n_pixels</tspan>
+</text>
+<text x="3245.0" y="1233.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">local_nx</tspan>
+</text>
+<text x="3245.0" y="1259.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">local_nz</tspan>
+</text>
+<text x="3245.0" y="1285.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">world_nx</tspan>
+</text>
+<text x="3245.0" y="1311.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">world_nz</tspan>
+</text>
+<text x="3245.0" y="1337.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">heading_deg</tspan>
+</text>
+<text x="3245.0" y="1363.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">pitch_off_deg</tspan>
+</text>
+<text x="3245.0" y="1389.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">source_json_path</tspan>
+</text>
+<rect x="90.0" y="1523.0" width="1220.0" height="2058.0" rx="26.0" fill="#ffffff" fill-opacity="1.000" stroke="#7c3aed" stroke-width="3.0"/>
+<rect x="90.0" y="1523.0" width="1220.0" height="72.0" rx="26.0" fill="#7c3aed" fill-opacity="0.100" stroke="#7c3aed" stroke-width="0.0"/>
+<text x="118.0" y="1571.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="31" font-weight="850" fill="#7c3aed" text-anchor="start">
+<tspan x="118.0" dy="0.0">World Factor Geometry</tspan>
+</text>
+<rect x="116.0" y="1623.0" width="1168.0" height="358.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="1661.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">global_factors  (275 rows)</tspan>
+</text>
+<text x="144.0" y="1699.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="1725.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">class</tspan>
+</text>
+<text x="144.0" y="1751.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">nx</tspan>
+</text>
+<text x="144.0" y="1777.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">nz</tspan>
+</text>
+<text x="144.0" y="1803.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">n_sources</tspan>
+</text>
+<text x="144.0" y="1829.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">total_pixels</tspan>
+</text>
+<text x="144.0" y="1855.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">normal_consistency_mean</tspan>
+</text>
+<text x="144.0" y="1881.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">offset_std_m</tspan>
+</text>
+<text x="144.0" y="1907.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">source_pixels_min</tspan>
+</text>
+<text x="144.0" y="1933.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">source_distance_median</tspan>
+</text>
+<text x="144.0" y="1959.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">registry_path</tspan>
+</text>
+<text x="665.0" y="1699.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">gid</tspan>
+</text>
+<text x="665.0" y="1725.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">quality</tspan>
+</text>
+<text x="665.0" y="1751.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">ny</tspan>
+</text>
+<text x="665.0" y="1777.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">d_global</tspan>
+</text>
+<text x="665.0" y="1803.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">n_unique_panos</tspan>
+</text>
+<text x="665.0" y="1829.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">normal_consistency_min</tspan>
+</text>
+<text x="665.0" y="1855.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">offset_spread_m</tspan>
+</text>
+<text x="665.0" y="1881.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">source_pixels_median</tspan>
+</text>
+<text x="665.0" y="1907.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">source_pixels_p10</tspan>
+</text>
+<text x="665.0" y="1933.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">source_distance_p90</tspan>
+</text>
+<rect x="116.0" y="2007.0" width="1168.0" height="306.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="2045.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">global_factor_sources  (2405 rows)</tspan>
+</text>
+<text x="144.0" y="2083.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="2109.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">run_id</tspan>
+</text>
+<text x="144.0" y="2135.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">key</tspan>
+</text>
+<text x="144.0" y="2161.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="144.0" y="2187.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">d_local</tspan>
+</text>
+<text x="144.0" y="2213.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">nx</tspan>
+</text>
+<text x="144.0" y="2239.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">nz</tspan>
+</text>
+<text x="144.0" y="2265.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">pano_east_m</tspan>
+</text>
+<text x="144.0" y="2291.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">sources_path</tspan>
+</text>
+<text x="665.0" y="2083.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">site_id</tspan>
+</text>
+<text x="665.0" y="2109.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">gid</tspan>
+</text>
+<text x="665.0" y="2135.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">panoid</tspan>
+</text>
+<text x="665.0" y="2161.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">n_pixels</tspan>
+</text>
+<text x="665.0" y="2187.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">d_global</tspan>
+</text>
+<text x="665.0" y="2213.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">ny</tspan>
+</text>
+<text x="665.0" y="2239.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">class</tspan>
+</text>
+<text x="665.0" y="2265.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">pano_north_m</tspan>
+</text>
+<rect x="116.0" y="2339.0" width="1168.0" height="332.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="2377.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">local_plane_supports  (8314 rows)</tspan>
+</text>
+<text x="144.0" y="2415.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="2441.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">run_id</tspan>
+</text>
+<text x="144.0" y="2467.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="144.0" y="2493.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_col_min</tspan>
+</text>
+<text x="144.0" y="2519.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_col_max</tspan>
+</text>
+<text x="144.0" y="2545.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">centroid_col</tspan>
+</text>
+<text x="144.0" y="2571.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">connected_components</tspan>
+</text>
+<text x="144.0" y="2597.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">dominant_component_ratio</tspan>
+</text>
+<text x="144.0" y="2623.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">mask_path</tspan>
+</text>
+<text x="144.0" y="2649.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">indexmap_path</tspan>
+</text>
+<text x="665.0" y="2415.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">site_id</tspan>
+</text>
+<text x="665.0" y="2441.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">panoid</tspan>
+</text>
+<text x="665.0" y="2467.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">cell_count</tspan>
+</text>
+<text x="665.0" y="2493.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_row_min</tspan>
+</text>
+<text x="665.0" y="2519.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_row_max</tspan>
+</text>
+<text x="665.0" y="2545.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">centroid_row</tspan>
+</text>
+<text x="665.0" y="2571.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">dominant_component_cells</tspan>
+</text>
+<text x="665.0" y="2597.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">support_area_px</tspan>
+</text>
+<text x="665.0" y="2623.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">contour_path</tspan>
+</text>
+<text x="665.0" y="2649.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">stage_path</tspan>
+</text>
+<rect x="116.0" y="2697.0" width="1168.0" height="384.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="2735.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">local_plane_boundaries_3d  (8314 rows)</tspan>
+</text>
+<text x="144.0" y="2773.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="2799.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">run_id</tspan>
+</text>
+<text x="144.0" y="2825.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="144.0" y="2851.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">centroid_x</tspan>
+</text>
+<text x="144.0" y="2877.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">centroid_z</tspan>
+</text>
+<text x="144.0" y="2903.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_y_min</tspan>
+</text>
+<text x="144.0" y="2929.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_x_max</tspan>
+</text>
+<text x="144.0" y="2955.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_z_max</tspan>
+</text>
+<text x="144.0" y="2981.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">distance_min_m</tspan>
+</text>
+<text x="144.0" y="3007.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">distance_max_m</tspan>
+</text>
+<text x="144.0" y="3033.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">support_path</tspan>
+</text>
+<text x="144.0" y="3059.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">reason</tspan>
+</text>
+<text x="665.0" y="2773.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">site_id</tspan>
+</text>
+<text x="665.0" y="2799.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">panoid</tspan>
+</text>
+<text x="665.0" y="2825.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">valid_boundary_points</tspan>
+</text>
+<text x="665.0" y="2851.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">centroid_y</tspan>
+</text>
+<text x="665.0" y="2877.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_x_min</tspan>
+</text>
+<text x="665.0" y="2903.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_z_min</tspan>
+</text>
+<text x="665.0" y="2929.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_y_max</tspan>
+</text>
+<text x="665.0" y="2955.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">area_estimate_m2</tspan>
+</text>
+<text x="665.0" y="2981.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">distance_median_m</tspan>
+</text>
+<text x="665.0" y="3007.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">boundary_points_path</tspan>
+</text>
+<text x="665.0" y="3033.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">status</tspan>
+</text>
+<rect x="116.0" y="3107.0" width="1168.0" height="462.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="140.0" y="3145.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="140.0" dy="0.0">factor_geometries  (275 rows)</tspan>
+</text>
+<text x="144.0" y="3183.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="144.0" y="3209.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">geometry_type</tspan>
+</text>
+<text x="144.0" y="3235.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">quality</tspan>
+</text>
+<text x="144.0" y="3261.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">unique_pano_count</tspan>
+</text>
+<text x="144.0" y="3287.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">centroid_y</tspan>
+</text>
+<text x="144.0" y="3313.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_x_min</tspan>
+</text>
+<text x="144.0" y="3339.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_z_min</tspan>
+</text>
+<text x="144.0" y="3365.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">bbox_y_max</tspan>
+</text>
+<text x="144.0" y="3391.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">extent_major_m</tspan>
+</text>
+<text x="144.0" y="3417.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">area_estimate_m2</tspan>
+</text>
+<text x="144.0" y="3443.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">ny</tspan>
+</text>
+<text x="144.0" y="3469.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">d_global</tspan>
+</text>
+<text x="144.0" y="3495.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">normal_spread_deg</tspan>
+</text>
+<text x="144.0" y="3521.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">boundary_spread_m</tspan>
+</text>
+<text x="144.0" y="3547.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="144.0" dy="0.0">status</tspan>
+</text>
+<text x="665.0" y="3183.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">gid</tspan>
+</text>
+<text x="665.0" y="3209.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">class</tspan>
+</text>
+<text x="665.0" y="3235.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">source_count</tspan>
+</text>
+<text x="665.0" y="3261.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">centroid_x</tspan>
+</text>
+<text x="665.0" y="3287.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">centroid_z</tspan>
+</text>
+<text x="665.0" y="3313.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_y_min</tspan>
+</text>
+<text x="665.0" y="3339.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_x_max</tspan>
+</text>
+<text x="665.0" y="3365.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">bbox_z_max</tspan>
+</text>
+<text x="665.0" y="3391.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">extent_minor_m</tspan>
+</text>
+<text x="665.0" y="3417.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">nx</tspan>
+</text>
+<text x="665.0" y="3443.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">nz</tspan>
+</text>
+<text x="665.0" y="3469.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">uncertainty_m</tspan>
+</text>
+<text x="665.0" y="3495.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">offset_spread_m</tspan>
+</text>
+<text x="665.0" y="3521.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="665.0" dy="0.0">geometry_path</tspan>
+</text>
+<rect x="1380.0" y="1523.0" width="1220.0" height="2058.0" rx="26.0" fill="#ffffff" fill-opacity="1.000" stroke="#be123c" stroke-width="3.0"/>
+<rect x="1380.0" y="1523.0" width="1220.0" height="72.0" rx="26.0" fill="#be123c" fill-opacity="0.100" stroke="#be123c" stroke-width="0.0"/>
+<text x="1408.0" y="1571.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="31" font-weight="850" fill="#be123c" text-anchor="start">
+<tspan x="1408.0" dy="0.0">Visibility and Surface Products</tspan>
+</text>
+<rect x="1406.0" y="1623.0" width="1168.0" height="254.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="1661.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">factor_visibility_candidates  (14300 rows)</tspan>
+</text>
+<text x="1434.0" y="1699.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1434.0" y="1725.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1434.0" y="1751.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">reason</tspan>
+</text>
+<text x="1434.0" y="1777.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">expected_visible</tspan>
+</text>
+<text x="1434.0" y="1803.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">view_angle_deg</tspan>
+</text>
+<text x="1434.0" y="1829.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">source_pixels</tspan>
+</text>
+<text x="1434.0" y="1855.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">occlusion_score</tspan>
+</text>
+<text x="1955.0" y="1699.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">gid</tspan>
+</text>
+<text x="1955.0" y="1725.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">status</tspan>
+</text>
+<text x="1955.0" y="1751.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">is_observed</tspan>
+</text>
+<text x="1955.0" y="1777.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">distance_m</tspan>
+</text>
+<text x="1955.0" y="1803.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_local_plane_id</tspan>
+</text>
+<text x="1955.0" y="1829.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">completeness_score</tspan>
+</text>
+<text x="1955.0" y="1855.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">visibility_path</tspan>
+</text>
+<rect x="1406.0" y="1903.0" width="1168.0" height="254.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="1941.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">factor_observation_quality  (2405 rows)</tspan>
+</text>
+<text x="1434.0" y="1979.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1434.0" y="2005.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1434.0" y="2031.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">n_pixels</tspan>
+</text>
+<text x="1434.0" y="2057.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">mask_purity_score</tspan>
+</text>
+<text x="1434.0" y="2083.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">distance_m</tspan>
+</text>
+<text x="1434.0" y="2109.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">usable_for_completion</tspan>
+</text>
+<text x="1434.0" y="2135.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">support_path</tspan>
+</text>
+<text x="1955.0" y="1979.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">gid</tspan>
+</text>
+<text x="1955.0" y="2005.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="1955.0" y="2031.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">completeness_score</tspan>
+</text>
+<text x="1955.0" y="2057.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">view_angle_deg</tspan>
+</text>
+<text x="1955.0" y="2083.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">occlusion_score</tspan>
+</text>
+<text x="1955.0" y="2109.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">quality_status</tspan>
+</text>
+<text x="1955.0" y="2135.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">boundary_path</tspan>
+</text>
+<rect x="1406.0" y="2183.0" width="1168.0" height="410.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="2221.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">surface_crops  (584 rows)</tspan>
+</text>
+<text x="1434.0" y="2259.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">crop_id</tspan>
+</text>
+<text x="1434.0" y="2285.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">gid</tspan>
+</text>
+<text x="1434.0" y="2311.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="1434.0" y="2337.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">anchor_panoid</tspan>
+</text>
+<text x="1434.0" y="2363.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">year_month</tspan>
+</text>
+<text x="1434.0" y="2389.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">bbox_col_min</tspan>
+</text>
+<text x="1434.0" y="2415.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">bbox_col_max</tspan>
+</text>
+<text x="1434.0" y="2441.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">crop_path</tspan>
+</text>
+<text x="1434.0" y="2467.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">support_path</tspan>
+</text>
+<text x="1434.0" y="2493.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">uv_transform_json</tspan>
+</text>
+<text x="1434.0" y="2519.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">purity_score</tspan>
+</text>
+<text x="1434.0" y="2545.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">visibility_status</tspan>
+</text>
+<text x="1434.0" y="2571.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">created_at</tspan>
+</text>
+<text x="1955.0" y="2259.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1955.0" y="2285.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1955.0" y="2311.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_type</tspan>
+</text>
+<text x="1955.0" y="2337.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">stack_id</tspan>
+</text>
+<text x="1955.0" y="2363.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">correspondence_id</tspan>
+</text>
+<text x="1955.0" y="2389.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">bbox_row_min</tspan>
+</text>
+<text x="1955.0" y="2415.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">bbox_row_max</tspan>
+</text>
+<text x="1955.0" y="2441.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">mask_path</tspan>
+</text>
+<text x="1955.0" y="2467.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">boundary_path</tspan>
+</text>
+<text x="1955.0" y="2493.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">projection_json</tspan>
+</text>
+<text x="1955.0" y="2519.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">completeness_score</tspan>
+</text>
+<text x="1955.0" y="2545.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">status</tspan>
+</text>
+<rect x="1406.0" y="2619.0" width="1168.0" height="306.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="2657.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">surface_rectified_observations  (486 rows)</tspan>
+</text>
+<text x="1434.0" y="2695.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">rectified_id</tspan>
+</text>
+<text x="1434.0" y="2721.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">gid</tspan>
+</text>
+<text x="1434.0" y="2747.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">local_plane_id</tspan>
+</text>
+<text x="1434.0" y="2773.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">rectified_path</tspan>
+</text>
+<text x="1434.0" y="2799.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">atlas_json_path</tspan>
+</text>
+<text x="1434.0" y="2825.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">texture_width</tspan>
+</text>
+<text x="1434.0" y="2851.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">valid_pixel_count</tspan>
+</text>
+<text x="1434.0" y="2877.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">source_weight</tspan>
+</text>
+<text x="1434.0" y="2903.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">created_at</tspan>
+</text>
+<text x="1955.0" y="2695.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1955.0" y="2721.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">panoid</tspan>
+</text>
+<text x="1955.0" y="2747.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_crop_id</tspan>
+</text>
+<text x="1955.0" y="2773.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">mask_path</tspan>
+</text>
+<text x="1955.0" y="2799.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_crop_path</tspan>
+</text>
+<text x="1955.0" y="2825.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">texture_height</tspan>
+</text>
+<text x="1955.0" y="2851.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">valid_fraction</tspan>
+</text>
+<text x="1955.0" y="2877.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">status</tspan>
+</text>
+<rect x="1406.0" y="2951.0" width="1168.0" height="306.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="1430.0" y="2989.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1430.0" dy="0.0">surface_stitches  (237 rows)</tspan>
+</text>
+<text x="1434.0" y="3027.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">stitch_id</tspan>
+</text>
+<text x="1434.0" y="3053.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">gid</tspan>
+</text>
+<text x="1434.0" y="3079.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">contribution_map_path</tspan>
+</text>
+<text x="1434.0" y="3105.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">method</tspan>
+</text>
+<text x="1434.0" y="3131.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">texture_width</tspan>
+</text>
+<text x="1434.0" y="3157.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">coverage_score</tspan>
+</text>
+<text x="1434.0" y="3183.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">preview_path</tspan>
+</text>
+<text x="1434.0" y="3209.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">quality_score</tspan>
+</text>
+<text x="1434.0" y="3235.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1434.0" dy="0.0">status</tspan>
+</text>
+<text x="1955.0" y="3027.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="1955.0" y="3053.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">texture_path</tspan>
+</text>
+<text x="1955.0" y="3079.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_crop_ids</tspan>
+</text>
+<text x="1955.0" y="3105.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">source_count</tspan>
+</text>
+<text x="1955.0" y="3131.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">texture_height</tspan>
+</text>
+<text x="1955.0" y="3157.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">atlas_json_path</tspan>
+</text>
+<text x="1955.0" y="3183.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">rectified_stack_path</tspan>
+</text>
+<text x="1955.0" y="3209.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">completeness_score</tspan>
+</text>
+<text x="1955.0" y="3235.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1955.0" dy="0.0">created_at</tspan>
+</text>
+<rect x="2670.0" y="1523.0" width="1220.0" height="2058.0" rx="26.0" fill="#ffffff" fill-opacity="1.000" stroke="#0f766e" stroke-width="3.0"/>
+<rect x="2670.0" y="1523.0" width="1220.0" height="72.0" rx="26.0" fill="#0f766e" fill-opacity="0.100" stroke="#0f766e" stroke-width="0.0"/>
+<text x="2698.0" y="1571.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="31" font-weight="850" fill="#0f766e" text-anchor="start">
+<tspan x="2698.0" dy="0.0">Temporal Correspondence</tspan>
+</text>
+<rect x="2696.0" y="1623.0" width="1168.0" height="280.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="1661.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">temporal_stacks  (74 rows)</tspan>
+</text>
+<text x="2724.0" y="1699.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">site_id</tspan>
+</text>
+<text x="2724.0" y="1725.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="2724.0" y="1751.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">anchor_panoid</tspan>
+</text>
+<text x="2724.0" y="1777.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">stack_status</tspan>
+</text>
+<text x="2724.0" y="1803.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">stack_dir</tspan>
+</text>
+<text x="2724.0" y="1829.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">anchor_lat</tspan>
+</text>
+<text x="2724.0" y="1855.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">anchor_date</tspan>
+</text>
+<text x="2724.0" y="1881.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">capture_count</tspan>
+</text>
+<text x="3245.0" y="1699.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">run_id</tspan>
+</text>
+<text x="3245.0" y="1725.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">batch_id</tspan>
+</text>
+<text x="3245.0" y="1751.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">stack_id</tspan>
+</text>
+<text x="3245.0" y="1777.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">photometa_count</tspan>
+</text>
+<text x="3245.0" y="1803.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">source_url</tspan>
+</text>
+<text x="3245.0" y="1829.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">anchor_lng</tspan>
+</text>
+<text x="3245.0" y="1855.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">harvested_at</tspan>
+</text>
+<text x="3245.0" y="1881.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">timeline_path</tspan>
+</text>
+<rect x="2696.0" y="1929.0" width="1168.0" height="332.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="1967.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">temporal_captures  (444 rows)</tspan>
+</text>
+<text x="2724.0" y="2005.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">site_id</tspan>
+</text>
+<text x="2724.0" y="2031.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="2724.0" y="2057.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">anchor_panoid</tspan>
+</text>
+<text x="2724.0" y="2083.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">capture_id</tspan>
+</text>
+<text x="2724.0" y="2109.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">panoid_returned</tspan>
+</text>
+<text x="2724.0" y="2135.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">date_short</tspan>
+</text>
+<text x="2724.0" y="2161.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">is_focal</tspan>
+</text>
+<text x="2724.0" y="2187.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">fetched_at</tspan>
+</text>
+<text x="2724.0" y="2213.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">capture_dir</tspan>
+</text>
+<text x="2724.0" y="2239.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">parsed_path</tspan>
+</text>
+<text x="3245.0" y="2005.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">run_id</tspan>
+</text>
+<text x="3245.0" y="2031.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">batch_id</tspan>
+</text>
+<text x="3245.0" y="2057.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">stack_id</tspan>
+</text>
+<text x="3245.0" y="2083.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">panoid_requested</tspan>
+</text>
+<text x="3245.0" y="2109.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">date_label</tspan>
+</text>
+<text x="3245.0" y="2135.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">year_month</tspan>
+</text>
+<text x="3245.0" y="2161.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">capture_source</tspan>
+</text>
+<text x="3245.0" y="2187.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">bytes</tspan>
+</text>
+<text x="3245.0" y="2213.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">meta_path</tspan>
+</text>
+<text x="3245.0" y="2239.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">pointcloud_meta_path</tspan>
+</text>
+<rect x="2696.0" y="2287.0" width="1168.0" height="306.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="2325.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">temporal_factor_correspondences  (2620 rows)</tspan>
+</text>
+<text x="2724.0" y="2363.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">correspondence_id</tspan>
+</text>
+<text x="2724.0" y="2389.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">gid</tspan>
+</text>
+<text x="2724.0" y="2415.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">anchor_panoid</tspan>
+</text>
+<text x="2724.0" y="2441.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">year_month</tspan>
+</text>
+<text x="2724.0" y="2467.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">matched_panoid</tspan>
+</text>
+<text x="2724.0" y="2493.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">residual_m</tspan>
+</text>
+<text x="2724.0" y="2519.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">keep</tspan>
+</text>
+<text x="2724.0" y="2545.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">reason</tspan>
+</text>
+<text x="2724.0" y="2571.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">overlay_path</tspan>
+</text>
+<text x="3245.0" y="2363.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="3245.0" y="2389.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">factor_local_plane_id</tspan>
+</text>
+<text x="3245.0" y="2415.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">stack_id</tspan>
+</text>
+<text x="3245.0" y="2441.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">source_panoid</tspan>
+</text>
+<text x="3245.0" y="2467.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">transform_json</tspan>
+</text>
+<text x="3245.0" y="2493.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">residual_px</tspan>
+</text>
+<text x="3245.0" y="2519.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">status</tspan>
+</text>
+<text x="3245.0" y="2545.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">crop_path</tspan>
+</text>
+<text x="3245.0" y="2571.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">correspondence_path</tspan>
+</text>
+<rect x="2696.0" y="2619.0" width="1168.0" height="228.0" rx="14.0" fill="#f8fafc" fill-opacity="1.000" stroke="#cbd5e1" stroke-width="1.4"/>
+<text x="2720.0" y="2657.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="2720.0" dy="0.0">temporal_surface_comparisons  (1 rows)</tspan>
+</text>
+<text x="2724.0" y="2695.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">comparison_id</tspan>
+</text>
+<text x="2724.0" y="2721.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">gid</tspan>
+</text>
+<text x="2724.0" y="2747.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">time_b</tspan>
+</text>
+<text x="2724.0" y="2773.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">source_stitch_id_b</tspan>
+</text>
+<text x="2724.0" y="2799.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">diff_path</tspan>
+</text>
+<text x="2724.0" y="2825.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="2724.0" dy="0.0">status</tspan>
+</text>
+<text x="3245.0" y="2695.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">workspace_id</tspan>
+</text>
+<text x="3245.0" y="2721.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">time_a</tspan>
+</text>
+<text x="3245.0" y="2747.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">source_stitch_id_a</tspan>
+</text>
+<text x="3245.0" y="2773.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">metric_json</tspan>
+</text>
+<text x="3245.0" y="2799.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">report_path</tspan>
+</text>
+<text x="3245.0" y="2825.0" font-family="Menlo, Consolas, monospace" font-size="17" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="3245.0" dy="0.0">created_at</tspan>
+</text>
+<line x1="1310.0" y1="804.0" x2="1380.0" y2="804.0" stroke="#64748b" stroke-width="4.0" marker-end="url(#arrow)"/>
+<line x1="2600.0" y1="804.0" x2="2670.0" y2="804.0" stroke="#64748b" stroke-width="4.0" marker-end="url(#arrow)"/>
+<line x1="700.0" y1="1423.0" x2="700.0" y2="1523.0" stroke="#64748b" stroke-width="4.0" marker-end="url(#arrow)"/>
+<line x1="1990.0" y1="1423.0" x2="1990.0" y2="1523.0" stroke="#64748b" stroke-width="4.0" marker-end="url(#arrow)"/>
+<line x1="3280.0" y1="1423.0" x2="3280.0" y2="1523.0" stroke="#64748b" stroke-width="4.0" marker-end="url(#arrow)"/>
+</svg>

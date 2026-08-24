@@ -1,0 +1,175 @@
+---
+title: "Google Street View Indexmap Mesh Reconstruction"
+subtitle: "Recovering textured polygon meshes from photometa plane geometry with correct panorama coordinate alignment"
+author: "Haoxi Yuan"
+date: "2026-04-30"
+format:
+  pdf:
+    documentclass: article
+    geometry: margin=1in
+    fontsize: 11pt
+    toc: true
+    number-sections: true
+    colorlinks: true
+    fig-pos: "H"
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+crossref:
+  fig-prefix: "Figure"
+  tbl-prefix: "Table"
+  eq-prefix: "Eq."
+  sec-prefix: "Section"
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Background {#sec-background}
+
+Prior work established that Google Street View encodes scene geometry inside the `photometa` protobuf as a triple of (1) a plane-equation table (`blob1`), (2) a per-pixel plane-index map (`indexmap`, 256×512 uint8), and (3) a quantized depth fallback (`depthmap`). The existing `build_rgb_pointcloud.py` pipeline exploits this geometry by computing ray-plane intersections per pixel and storing each intersection as an independent colored point, producing a PLY point cloud that is correct in 3D position but discards the coplanar-pixel structure. The downstream `3d_viewer_megafused.html` viewer renders this as a dense scatter — visually indistinguishable from LiDAR output.
+
+The gap this work addresses is the rendering discrepancy between the raw `geometry_vis` diagnostic (which directly colorizes the indexmap and shows razor-sharp building silhouettes) and the point-cloud viewer. Google's actual stored representation is a **lightweight semantic LOD-1** — a small set of flat planes each covering many pixels — and the clean appearance in the visualization arises from the coplanar grouping, not from image resolution. Reconstructing polygon meshes from the indexmap recovers that sharpness without additional data capture.
+
+# Research Question {#sec-question}
+
+Can the per-pixel plane-index map in Google Street View photometa be converted into a correctly UV-mapped polygon mesh, and does the indexmap's coordinate frame match the stored panoramic JPEG?
+
+Binding constraints: all computation must operate on already-captured local data (52 panoramas, Ghim Moh Road Market capture, April 2026); no additional Google API calls for geometry; output must be renderable in the existing Three.js viewer infrastructure.
+
+# Methods {#sec-methods}
+
+## Plane Geometry Encoding {#sec-methods-encoding}
+
+Each `photometa` binary blob1 begins with an 8-byte header (version byte, 2-byte plane count, 5 reserved bytes), followed by `N × 16` bytes encoding `N` planes as `(nx, ny, nz, d)` float32 quadruples. The relation $\mathbf{n} \cdot \mathbf{x} = d$ defines each plane, where $\mathbf{n}$ is the unit normal and $d$ is the signed distance from the origin. The subsequent 512×256 bytes are the uint8 indexmap: each pixel value is the plane index for that equirectangular direction. An index of 0 denotes sky or unassigned. [see tr-0003]
+
+The analytical 3D position of each pixel direction $\hat{\mathbf{r}}$ given its assigned plane $(\mathbf{n}, d)$ is:
+
+$$t = \frac{d}{\mathbf{n} \cdot \hat{\mathbf{r}}}, \quad \mathbf{p} = t \hat{\mathbf{r}} \tag{1}$$
+
+This is an analytic ray-plane intersection, not a depth measurement; every pixel belonging to the same plane shares an exact planar locus.
+
+## Pixel-Level Quad-Strip Triangulation {#sec-methods-triangulation}
+
+For each panorama, we iterate over all pixels $(i, j)$ in the 256×512 indexmap and form two triangles from the quad $(i,j),(i,j+1),(i+1,j),(i+1,j+1)$ if and only if all four corners carry the same plane index and all four 3D positions satisfy a per-panorama distance cap (`effective_max_distance_m`, adaptively set to the p99.9 of per-pixel distances). This strict coplanarity condition ensures that mesh boundaries coincide exactly with indexmap region boundaries — the same boundaries visible in `geometry_vis_1.png`.
+
+Connected components are extracted per plane index using 8-connected labeling (`scipy.ndimage.label`). The 360° seam (columns 0 and 511) is handled by a union-find merge: two connected components that each touch the opposing edge and share the same plane index are merged into a single group, preventing the same wall from being split into two half-meshes.
+
+Texture coordinates are derived from the equirectangular angles: for each 3D vertex, the direction back to the camera center gives $(\theta, \phi)$, from which the UV in the panoramic JPEG follows directly.
+
+## Coordinate Frame Analysis and Yaw Correction {#sec-methods-yaw}
+
+An initial implementation assumed that the indexmap's column axis and the panoramic JPEG column axis were co-registered, producing visually misaligned textures and severe ground distortion. Investigation revealed the root cause: **the indexmap's column axis is world-aligned** (column 0 ≈ geographic north, column 256 ≈ south), whereas the panoramic JPEG is camera-aligned — its center column points in the camera's forward direction (yaw).
+
+Confirmation came from two sources. First, `visualize_geometry.py` labels the indexmap x-axis as "Heading (°, world)" and draws a cyan vertical line at the camera's recorded yaw [see tr-0058]. Second, executing `test_b2_clicktogo.py` showed that the b2 categorical grid (a separate 256×512 uint8 map encoding click-to-go navigation destinations) has centroid headings that match neighbour panorama headings with a mean error of 2.82° and a maximum of 18.03° across 74 distinct b2 IDs [see tr-0086]. Because the b2 grid is the same resolution and orientation as the indexmap, this independently confirms the world-frame interpretation.
+
+The corrected UV mapping from world-frame column $j$ to JPEG pixel column $u$ is:
+
+$$\theta_{\text{world}} = \frac{j + 0.5}{W} \cdot 2\pi - \pi, \quad \theta_{\text{cam}} = \theta_{\text{world}} - \psi, \quad u = \frac{\theta_{\text{cam}} + \pi}{2\pi} \tag{2}$$
+
+where $\psi$ is the camera yaw in radians (extracted from `photometa` at path `[1][0][5][0][1][2][0]`) and $W = 512$. Seam-crossing triangles (those with vertex $u$-spread exceeding 0.5) receive a duplicate vertex with $u + 1.0$; Three.js `RepeatWrapping` renders this seamlessly.
+
+## WebGL Canvas Probing {#sec-methods-probe}
+
+To ground-truth the coordinate-frame hypothesis empirically, a Playwright-based probe (`probe-drag-rotate.js`) was developed to capture WebGL canvas renders at known heading values obtained via drag-rotate interactions. The key technical requirement is injecting `preserveDrawingBuffer: true` into the WebGL context creation call via `HTMLCanvasElement.prototype.getContext` patching in `context.addInitScript`, before any navigation. The probe confirmed that `pointer` cursor events indicate navigable 3D surfaces while `auto` cursor indicates non-navigable regions (sky, upper periphery) [see tr-0113].
+
+# Findings {#sec-findings}
+
+## Google Street View Geometry Is a Semantic LOD-1 Representation {#sec-findings-encoding}
+
+The `photometa` triple encodes scene geometry as a small set of labeled flat planes rather than a dense depth map. For panorama `DBIdIlIs84Q8` at the Ghim Moh site, the plane table contains 195 entries; a single 256×512 uint8 indexmap assigns each of the 131,072 pixels to one of these planes [see tr-0003, tr-0005]. The resulting `geometry_vis_0.png` (class-colored indexmap, @fig-geometry-class) shows sharp building silhouettes because the underlying data is planar, not because of high measurement resolution.
+
+![Class-colored indexmap for pano `DBIdIlIs84Q8`: facade (purple), ground (green), roof (brown), sky (black). Plane boundaries are analytically exact.](figures/indexmap-geometry-class.png){#fig-geometry-class}
+
+![Raw plane-hash colored indexmap for the same panorama. Each distinct color represents one connected planar region; boundaries match building edges precisely.](figures/indexmap-geometry-raw.png){#fig-geometry-raw}
+
+## Full-Panorama Mesh Statistics Across 52 Captures {#sec-findings-mesh}
+
+The `derive_pano_mesh.py` pipeline processes 52 panoramas in 23.3 seconds on a CPU-only M-series Mac, producing the output summarized in @tbl-mesh-stats.
+
+| Metric | Value |
+|---|---|
+| Total panoramas | 52 |
+| Total vertices | 4,144,231 |
+| Total triangles | 7,799,784 |
+| Total surface area | 441,476 m² |
+| Processing time | 23.3 s |
+| Triangle edge length p50 | 0.06 m |
+| Triangle edge length p95 | 1.44 m |
+| Maximum edge length (pano 0) | 23.31 m |
+| Triangles with edge > 30 m | 0 |
+| Disk footprint (binary + 2K textures) | 224 MB |
+
+: Full-scene mesh statistics for Ghim Moh Road Market capture (52 panoramas). [see tr-0022, tr-0026, tr-0071] {#tbl-mesh-stats}
+
+Per-pano vertex counts range from approximately 70,500 (pano 51, 56 groups) to 92,000 (pano 4, 26 groups), reflecting variation in scene complexity [see tr-0027]. The absence of triangles with edges exceeding 30 m confirms the distance cap is effective.
+
+## Indexmap Is in World Frame; Panoramic JPEG Is in Camera Frame {#sec-findings-frame}
+
+The coordinate-frame mismatch was confirmed by two independent lines of evidence:
+
+1. **Facade normal histogram**: for pano 0 (yaw 226°) and pano 1 (yaw 251°), the 8-bin histogram of facade-plane normal bearings shows the same multimodal distribution centered on real-world building orientations at Ghim Moh (predominantly N-S and E-W grid). Panos 2 and 3 (yaw ~350°) showed zero facade planes in their parsed JSON — these are neighbor photometas stored in a different format — ruling out the alternative hypothesis that bearings rotate with camera yaw [see tr-0051].
+
+2. **B2 click-to-go heading alignment**: the blob2 categorical map assigns each non-zero cell a navigation destination. Centroid headings of 74 distinct b2 IDs match known neighbour panorama headings with mean error 2.82°, p75 of 2.64°, and all 74 within 30° [see tr-0086]. This is only consistent with the b2 grid (and by shared format, the indexmap) being world-aligned.
+
+After applying the yaw correction of @eq-2, visual alignment between remapped indexmap boundaries and the panoramic JPEG improves substantially. @fig-yaw-aligned-edges shows the corrected edge overlay for pano `DBIdIlIs84Q8` (yaw 250.71°): indexmap region edges (red) track photographic building edges at pixel resolution across the full 360° sweep.
+
+![Yaw-corrected indexmap region edges (red) superimposed on the panoramic JPEG for pano `DBIdIlIs84Q8` (yaw = 250.71°). Edges follow building outlines and ground boundaries.](figures/yaw-aligned-edges.png){#fig-yaw-aligned-edges}
+
+![Yaw-corrected indexmap (hash colors) blended with the panoramic JPEG at 45%/55% opacity. Color blocks track photographic regions.](figures/yaw-corrected-overlay.png){#fig-yaw-overlay}
+
+## B2 Map Confirmed as Click-to-Go Navigation Destination Lookup {#sec-findings-b2}
+
+The blob2 (b2) grid encodes per-pixel navigation destinations: each non-zero value identifies which neighbour panorama the user would be transported to by clicking that screen location. The heading-alignment test across 74 b2 IDs at pano 1 yields: mean 2.82°, p25 0.65°, p75 2.64°, max 18.03°; 71/74 IDs align within 15° [see tr-0086]. This is consistent with the hypothesis that b2 stores the nearest navigable panorama in each screen direction.
+
+## WebGL Canvas Capture Requires Context-Level Injection {#sec-findings-webgl}
+
+Injecting `preserveDrawingBuffer: true` via `HTMLCanvasElement.prototype.getContext` patching in `addInitScript` allows `canvas.toDataURL()` to return valid pixel content (mean 134, 6.7 MB PNG) when tested in a single-page load session [see tr-0121]. However, in the drag-rotate probe where the script patches the context before navigation and then performs drag interactions, all 39 canvas captures returned all-zero (black) images [see tr-0133]. This indicates the patch does not persist across the drag-induced re-renders: Google's renderer apparently re-acquires the WebGL context without `preserveDrawingBuffer` in response to drag events. This remains an open technical issue.
+
+# Discussion {#sec-discussion}
+
+The central result is that Google's panoramic geometry is a world-frame representation — both plane normals and the indexmap column axis refer to geographic north — while the paired JPEG uses a camera-frame column axis. All prior attempts to UV-map the mesh were off by the camera yaw angle, which ranges up to ~350° across the 52-pano dataset. Correctly accounting for this shift (@eq-2) produces pixel-accurate texture alignment as verified by the edge overlay.
+
+The b2 heading-alignment test is significant not just for click-to-go confirmation but as a calibration reference: it establishes that the world-frame interpretation is correct to within ~3° median angular precision, which is sufficient for LOD-1 mesh reconstruction and semantic labeling but may not be sufficient for photogrammetric georeferencing without additional correction.
+
+The multi-pano mesh viewer (`3d_viewer_meshfused.html`) renders all 52 panoramas as independent textured meshes. At this stage, no cross-pano occlusion resolution is performed: the same wall face may be triangulated from multiple viewpoints and overlaid with slight z-fighting. The `derive_super_planes.py` / `derive_global_planes.py` pipeline exists as a separate path for fusing plane hypotheses across viewpoints, but was deliberately not integrated in this session to keep the indexmap-to-mesh pipeline independent and reproducible.
+
+The drag-rotate WebGL canvas failure opens a question about Google's renderer lifecycle. The most likely cause is that the canvas context is destroyed and re-created on each view update, bypassing the init-time `getContext` patch. Resolving this would require either a MutationObserver-based re-injection or a Chrome extension that intercepts WebGL context creation at the browser level.
+
+The downstream goal (project memory) is a spatially indexed semantic vector database, not a mesh export. The current LOD-1 mesh provides per-plane semantic class (facade / ground / roof / oblique) and world-space bounding geometry, which are the necessary inputs for region-level embedding and spatial queries. The next step is to run VLM captioning on the per-plane rectified patches from `derive_primitive_atlas.py` and associate those embeddings with the plane-to-world geometry derived here.
+
+# Appendix: Methods Log {#sec-appendix-log}
+
+- 2026-04-29T17:49Z — User query: why does `geometry_vis_1.png` show clean building faces but `3d_viewer_megafused.html` shows a point cloud [tr-0000 to tr-0005]
+- 2026-04-29T17:50Z — Diagnosis: indexmap encodes plane membership per pixel; viewer pipeline converts each pixel to an independent point rather than co-planar polygon [tr-0005]
+- 2026-04-29T17:54Z — Methodology confirmed: pixel-level quad-strip triangulation; all 52 panos; texture UVs from equirectangular angles; viewer parity with indexmap visualization
+- 2026-04-29T18:01Z — Data audit: 52 pano photometas with geometry; indexmap shape (256, 512); yaw extracted from `parsed.json` path [1][0][5][0][1][2][0]; neighbor photometas in separate directory [tr-0017, tr-0018]
+- 2026-04-29T18:03Z — `derive_pano_mesh.py` written (546 lines); smoke test pano 0: 78,449 v, 148,162 tri, 64 groups, 11,622 m² in 0.5 s [tr-0019, tr-0022]
+- 2026-04-29T18:04Z — Geometry sanity check pano 0: world bbox ±100 m, p50 edge 0.06 m, max edge 23.31 m, 0 outliers [tr-0026]
+- 2026-04-29T18:06Z — Full 52-pano run: 4,143,427 v, 7,799,784 tri in 23.1 s [tr-0027]
+- 2026-04-29T18:06Z — `build_meshfused_viewer.py` written; viewer HTML generated; HTTP smoke tests all pass (200 OK) [tr-0023, tr-0030]
+- 2026-04-29T18:10Z — Headless Chrome WebGL capture (SwiftShader) confirms viewer loads with all 52 panos and correct HUD [tr-0037, tr-0038]
+- 2026-04-29T18:21Z — User reports texture stretching and mesh-texture misalignment
+- 2026-04-29T18:22Z — Investigation: indexmap is world-aligned; JPEG is camera-aligned; yaw correction required [tr-0048, tr-0049]
+- 2026-04-29T18:24Z — Facade normal histogram confirms world-frame planes: same bearings at pano 0 (yaw 226°) and pano 1 (yaw 251°) [tr-0051]
+- 2026-04-29T18:29Z — `visualize_geometry.py` examination confirms indexmap x-axis = world heading [tr-0058]
+- 2026-04-29T18:31Z — Yaw correction implemented in `derive_pano_mesh.py` [tr-0061 to tr-0067]
+- 2026-04-29T18:35Z — Post-fix smoke test: 78,494 v (45 extra seam-duplicate vertices); UV seam-dups count 195 as expected [tr-0068, tr-0069]
+- 2026-04-29T18:38Z — Visual edge-overlay at 1024×512 confirms yaw-corrected indexmap boundaries align with photographic edges at pano `DBIdIlIs84Q8` [tr-0074 to tr-0077]
+- 2026-04-29T18:39Z — Pano 0 overlay also aligns (pitch deviation 82.56° is tolerable at LOD-1 scale) [tr-0080, tr-0081]
+- 2026-04-29T18:36Z — Full 52-pano rebuild with yaw fix: 4,144,231 v, 23.3 s [tr-0071]
+- 2026-04-29T18:47Z — User requests fresh probe of Google Maps rendering: how does cursor/click relate to mesh position
+- 2026-04-29T18:48Z — b2 click-to-go validation: mean heading error 2.82°, all 74/74 within 30°; confirms world-frame indexmap [tr-0086]
+- 2026-04-29T18:52Z — `probe-jpg-orientation.js` written; 4 cardinal heading screenshots captured [tr-0092, tr-0093, tr-0099]
+- 2026-04-29T18:59Z — `probe-cursor-mesh.js` written; cursor-map probe: 77 grid points; `pointer` cursor at 72/77 (navigable surfaces); only 1 unique matrix3d overlay detected [tr-0111 to tr-0114]
+- 2026-04-29T19:00Z — Discovery: navigation feedback is WebGL-rendered, not DOM; switched strategy to click → panoid recording [tr-0117]
+- 2026-04-29T19:05Z — `probe-canvas-mesh.js` written: WebGL canvas capture + click recording [tr-0116]
+- 2026-04-29T19:09Z — `preserveDrawingBuffer` injection confirmed working for single-session capture: 6.7 MB PNG, mean 134 [tr-0121]
+- 2026-04-29T19:14Z — User clarifies: heading change requires drag (mouse down + move + up), not URL navigation
+- 2026-04-29T19:16Z — `probe-drag-rotate.js` written; drag-rotate sweep produces correct heading increments (~55°/drag) [tr-0124, tr-0125]
+- 2026-04-29T19:20Z — Full 39-snapshot sweep (12 rotations × 3 zoom levels) captured; headings and FOVs correct in URL [tr-0127]
+- 2026-04-29T19:22Z — All 39 canvas captures are all-black (mean 0.0, 100% black): `preserveDrawingBuffer` patch does not survive drag-induced context re-acquisition [tr-0133, tr-0134]
+- 2026-04-29T19:24Z — Session ended; canvas capture failure unresolved

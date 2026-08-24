@@ -1,0 +1,6 @@
+duckdb>=1.1
+matplotlib>=3.8
+numpy>=2.0
+opencv-python-headless>=4.8
+pillow>=10.0
+scipy>=1.11

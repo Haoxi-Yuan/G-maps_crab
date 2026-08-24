@@ -1,0 +1,199 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="1360" viewBox="0 0 3000 1360">
+<rect width="3000" height="1360" fill="#ffffff"/>
+
+<defs>
+  <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+    <path d="M2,2 L10,6 L2,10 z" fill="#64748b"/>
+  </marker>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+    <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#64748b" flood-opacity="0.18"/>
+  </filter>
+</defs>
+
+<text x="90.0" y="88.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="52" font-weight="850" fill="#111827" text-anchor="start">
+<tspan x="90.0" dy="0.0">b  One-time Street View evidence acquisition</tspan>
+</text>
+<text x="92.0" y="136.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="24" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="92.0" dy="0.0">Raw spatial and temporal evidence is captured once; later algorithms only read from this immutable layer.</tspan>
+</text>
+<text x="95.0" y="225.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="34" font-weight="800" fill="#1d4ed8" text-anchor="start">
+<tspan x="95.0" dy="0.0">Spatial raw capture</tspan>
+</text>
+<rect x="90.0" y="260.0" width="760.0" height="316.0" rx="18.0" fill="#eff6ff" fill-opacity="1.000" stroke="#2563eb" stroke-width="2.2"/>
+<rect x="90.0" y="260.0" width="760.0" height="54.0" rx="18.0" fill="#2563eb" fill-opacity="0.180" stroke="#2563eb" stroke-width="0.0"/>
+<text x="114.0" y="298.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="114.0" dy="0.0">data/raw/google_maps/spatial/&lt;site&gt;/&lt;run&gt;/</tspan>
+</text>
+<text x="116.0" y="344.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">photometa.bin + parsed.json</tspan>
+</text>
+<text x="116.0" y="376.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">panoramas/&lt;panoid&gt;.jpg</tspan>
+</text>
+<text x="116.0" y="408.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">neighbor_photometas/&lt;panoid&gt;.bin</tspan>
+</text>
+<text x="116.0" y="440.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">tile_inventory.json</tspan>
+</text>
+<text x="116.0" y="472.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">screenshots/ + trace metadata</tspan>
+</text>
+<text x="116.0" y="504.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">POI ftid pair; place_id reserved</tspan>
+</text>
+<text x="116.0" y="536.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">b2/SVI click-to-go grid</tspan>
+</text>
+<text x="95.0" y="760.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="34" font-weight="800" fill="#15803d" text-anchor="start">
+<tspan x="95.0" dy="0.0">Temporal raw capture</tspan>
+</text>
+<rect x="90.0" y="795.0" width="760.0" height="380.0" rx="18.0" fill="#f0fdf4" fill-opacity="1.000" stroke="#16a34a" stroke-width="2.2"/>
+<rect x="90.0" y="795.0" width="760.0" height="54.0" rx="18.0" fill="#16a34a" fill-opacity="0.180" stroke="#16a34a" stroke-width="0.0"/>
+<text x="114.0" y="833.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="114.0" dy="0.0">data/raw/google_maps/temporal/&lt;anchor&gt;/&lt;stack&gt;/</tspan>
+</text>
+<text x="116.0" y="879.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">timeline.json</tspan>
+</text>
+<text x="116.0" y="911.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">captures/&lt;date&gt;_&lt;panoid&gt;/photometa.bin</tspan>
+</text>
+<text x="116.0" y="943.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">captures/&lt;date&gt;_&lt;panoid&gt;/parsed.json</tspan>
+</text>
+<text x="116.0" y="975.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">panoramas/&lt;old_panoid&gt;.jpg</tspan>
+</text>
+<text x="116.0" y="1007.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">photometa_0_parsed_planes.json</tspan>
+</text>
+<text x="116.0" y="1039.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">photometa_0_parsed_indexmap.bin</tspan>
+</text>
+<text x="116.0" y="1071.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">photometa_0_parsed_depthmap.bin</tspan>
+</text>
+<text x="116.0" y="1103.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">merged_pointcloud.npz / .ply</tspan>
+</text>
+<text x="116.0" y="1135.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="116.0" dy="0.0">pointcloud_meta.json</tspan>
+</text>
+<line x1="870.0" y1="525.0" x2="1060.0" y2="525.0" stroke="#2563eb" stroke-width="5.0" marker-end="url(#arrow)"/>
+<line x1="870.0" y1="1050.0" x2="1060.0" y2="820.0" stroke="#16a34a" stroke-width="5.0" marker-end="url(#arrow)"/>
+<rect x="1080.0" y="365.0" width="690.0" height="316.0" rx="18.0" fill="#fff7ed" fill-opacity="1.000" stroke="#ea580c" stroke-width="2.2"/>
+<rect x="1080.0" y="365.0" width="690.0" height="54.0" rx="18.0" fill="#ea580c" fill-opacity="0.180" stroke="#ea580c" stroke-width="0.0"/>
+<text x="1104.0" y="403.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1104.0" dy="0.0">Parsed geometry primitives</tspan>
+</text>
+<text x="1106.0" y="449.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">panoid, lat, lng</tspan>
+</text>
+<text x="1106.0" y="481.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">heading_deg, pitch_deg, roll_deg</tspan>
+</text>
+<text x="1106.0" y="513.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">plane table: nx, ny, nz, d</tspan>
+</text>
+<text x="1106.0" y="545.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">indexmap: 256 x 512 uint8</tspan>
+</text>
+<text x="1106.0" y="577.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">depthmap: 256 x 512</tspan>
+</text>
+<text x="1106.0" y="609.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">b2 region ids and target-panoid estimate</tspan>
+</text>
+<text x="1106.0" y="641.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="20" font-weight="400" fill="#334155" text-anchor="start">
+<tspan x="1106.0" dy="0.0">capture year_month</tspan>
+</text>
+<line x1="1788.0" y1="550.0" x2="1980.0" y2="550.0" stroke="#64748b" stroke-width="5.0" marker-end="url(#arrow)"/>
+<line x1="1788.0" y1="725.0" x2="1980.0" y2="725.0" stroke="#64748b" stroke-width="5.0" marker-end="url(#arrow)"/>
+<text x="2020.0" y="225.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="34" font-weight="800" fill="#6d28d9" text-anchor="start">
+<tspan x="2020.0" dy="0.0">Cataloged evidence</tspan>
+</text>
+<rect x="1985.0" y="260.0" width="895.0" height="710.0" rx="22.0" fill="#faf5ff" fill-opacity="1.000" stroke="#7c3aed" stroke-width="2.4"/>
+<rect x="2025.0" y="312.0" width="815.0" height="76.0" rx="12.0" fill="#ede9fe" fill-opacity="1.000" stroke="#c4b5fd" stroke-width="1.4"/>
+<text x="2050.0" y="360.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#111827" text-anchor="start">
+<tspan x="2050.0" dy="0.0">DuckDB catalog: data/catalog/sv3d.duckdb</tspan>
+</text>
+<rect x="2025.0" y="396.0" width="815.0" height="74.0" rx="10.0" fill="#ffffff" fill-opacity="1.000" stroke="#ddd6fe" stroke-width="1.2"/>
+<text x="2050.0" y="430.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#3b0764" text-anchor="start">
+<tspan x="2050.0" dy="0.0">raw_assets  (20145)</tspan>
+</text>
+<text x="2420.0" y="430.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2420.0" dy="0.0">asset_type, relative_path, sha256, panoid</tspan>
+</text>
+<rect x="2025.0" y="484.0" width="815.0" height="74.0" rx="10.0" fill="#ffffff" fill-opacity="1.000" stroke="#ddd6fe" stroke-width="1.2"/>
+<text x="2050.0" y="518.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#3b0764" text-anchor="start">
+<tspan x="2050.0" dy="0.0">pano_observations  (52)</tspan>
+</text>
+<text x="2420.0" y="518.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2420.0" dy="0.0">lat/lng, east/north/up, n_planes, n_points</tspan>
+</text>
+<rect x="2025.0" y="572.0" width="815.0" height="74.0" rx="10.0" fill="#ffffff" fill-opacity="1.000" stroke="#ddd6fe" stroke-width="1.2"/>
+<text x="2050.0" y="606.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#3b0764" text-anchor="start">
+<tspan x="2050.0" dy="0.0">visible_pois  (187)</tspan>
+</text>
+<text x="2420.0" y="606.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2420.0" dy="0.0">ftid_0, ftid_1, place_id, name, category</tspan>
+</text>
+<rect x="2025.0" y="660.0" width="815.0" height="74.0" rx="10.0" fill="#ffffff" fill-opacity="1.000" stroke="#ddd6fe" stroke-width="1.2"/>
+<text x="2050.0" y="694.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#3b0764" text-anchor="start">
+<tspan x="2050.0" dy="0.0">b2_regions  (4139)</tspan>
+</text>
+<text x="2420.0" y="694.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2420.0" dy="0.0">cell_count, centroid_heading_deg, target_panoid</tspan>
+</text>
+<rect x="2025.0" y="748.0" width="815.0" height="74.0" rx="10.0" fill="#ffffff" fill-opacity="1.000" stroke="#ddd6fe" stroke-width="1.2"/>
+<text x="2050.0" y="782.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#3b0764" text-anchor="start">
+<tspan x="2050.0" dy="0.0">temporal_captures  (444)</tspan>
+</text>
+<text x="2420.0" y="782.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2420.0" dy="0.0">year_month, returned panoid, parsed_path</tspan>
+</text>
+<rect x="2025.0" y="836.0" width="815.0" height="74.0" rx="10.0" fill="#ffffff" fill-opacity="1.000" stroke="#ddd6fe" stroke-width="1.2"/>
+<text x="2050.0" y="870.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="23" font-weight="800" fill="#3b0764" text-anchor="start">
+<tspan x="2050.0" dy="0.0">plane_observations  (8314)</tspan>
+</text>
+<text x="2420.0" y="870.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2420.0" dy="0.0">local_n*, local_d, world_n*, world_d</tspan>
+</text>
+<text x="1080.0" y="1125.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="30" font-weight="800" fill="#0f172a" text-anchor="start">
+<tspan x="1080.0" dy="0.0">Layer separation</tspan>
+</text>
+<rect x="1080.0" y="1165.0" width="420.0" height="126.0" rx="16.0" fill="#dbeafe" fill-opacity="1.000" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="1102.0" y="1210.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#111827" text-anchor="start">
+<tspan x="1102.0" dy="0.0">raw</tspan>
+</text>
+<text x="1102.0" y="1248.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="1102.0" dy="0.0">source evidence; never rewritten</tspan>
+<tspan x="1102.0" dy="21.2">by algorithms</tspan>
+</text>
+<rect x="1535.0" y="1165.0" width="420.0" height="126.0" rx="16.0" fill="#fed7aa" fill-opacity="1.000" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="1557.0" y="1210.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#111827" text-anchor="start">
+<tspan x="1557.0" dy="0.0">intermediate</tspan>
+</text>
+<text x="1557.0" y="1248.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="1557.0" dy="0.0">decoded geometry,</tspan>
+<tspan x="1557.0" dy="21.2">indexmap/depth/planes, point</tspan>
+<tspan x="1557.0" dy="21.2">clouds</tspan>
+</text>
+<rect x="1990.0" y="1165.0" width="420.0" height="126.0" rx="16.0" fill="#dcfce7" fill-opacity="1.000" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="2012.0" y="1210.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#111827" text-anchor="start">
+<tspan x="2012.0" dy="0.0">derived</tspan>
+</text>
+<text x="2012.0" y="1248.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2012.0" dy="0.0">global factors, surface crops,</tspan>
+<tspan x="2012.0" dy="21.2">atlas textures, correspondences</tspan>
+</text>
+<rect x="2445.0" y="1165.0" width="420.0" height="126.0" rx="16.0" fill="#fce7f3" fill-opacity="1.000" stroke="#94a3b8" stroke-width="1.5"/>
+<text x="2467.0" y="1210.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="25" font-weight="800" fill="#111827" text-anchor="start">
+<tspan x="2467.0" dy="0.0">diagnostics</tspan>
+</text>
+<text x="2467.0" y="1248.0" font-family="Inter, Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#475569" text-anchor="start">
+<tspan x="2467.0" dy="0.0">overlays, topdown checks,</tspan>
+<tspan x="2467.0" dy="21.2">spacetime matrices</tspan>
+</text>
+</svg>

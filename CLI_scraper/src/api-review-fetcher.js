@@ -27,6 +27,14 @@ const REVIEW_RPC_ID = 'qv9Egd'; // MapsUgcPostService.ListUgcPosts
 // signed grass-cs one that expires). Off by default: raw entries are large.
 const CAPTURE_RAW_PHOTOS = process.env.CAPTURE_RAW_PHOTOS === '1';
 
+// Pause before the single retry that decides whether an HTTP 429/403 or an
+// empty low-coverage page is a real block. Measured on the sg_parks_473 run:
+// 784 backoffs, every retry recovered data and none escalated to `blocked`,
+// so the pause is absorbing transient empties rather than hard blocks. The
+// previous 30 s cost ~12% of worker time for that. Override to compare.
+const BLOCK_BACKOFF_MS = Number(process.env.BLOCK_BACKOFF_MS) || 10000;
+
+
 /**
  * Parse Google's chunked batchexecute response and return the inner data
  * for our service. Format on the wire:
@@ -60,9 +68,16 @@ function parseBatchexecuteResponse(text, rpcServicePath = '/MapsUgcPostService.L
     let envelope;
     try { envelope = JSON.parse(text.slice(startIdx, end)); }
     catch { pos = startIdx + 1; continue; }
-    // envelope = [["wrb.fr","<service>","<inner-as-string>",null,null,null,"generic"], ...]
+    // envelope = [["wrb.fr","<id>","<inner-as-string>",null,null,null,"generic"], ...]
+    //
+    // The second slot is either the full service path or the short rpcid. Both
+    // shapes come back for the same request — roughly a tenth of responses use
+    // the rpcid — and matching only the path silently dropped those places with
+    // zero reviews under stop:parse_failure, even though the body held a
+    // complete review page.
     for (const entry of envelope) {
-      if (Array.isArray(entry) && entry[0] === 'wrb.fr' && entry[1] === rpcServicePath) {
+      if (Array.isArray(entry) && entry[0] === 'wrb.fr'
+          && (entry[1] === rpcServicePath || entry[1] === REVIEW_RPC_ID)) {
         try { return JSON.parse(entry[2]); } catch { return null; }
       }
     }
@@ -71,15 +86,25 @@ function parseBatchexecuteResponse(text, rpcServicePath = '/MapsUgcPostService.L
   return null;
 }
 
+// Sort order lives at inner[12]. "Most relevant" (1) is a curated subset that
+// Google truncates: on Marsiling Market (2475 shown) it serves 823 reviews and
+// then returns an empty page with no token, which reads as a clean end. Sorting
+// by newest (2) walks the full set — 2475/2475 on the same place. The GET-era
+// fetcher forced the same thing via the URL's !13m1!1eN segment and defaulted to
+// newest; that got lost porting to batchexecute, and the whole 2026-08 Singapore
+// crawl ran at ~65% coverage because of it.
+const REVIEW_SORTS = { relevant: 1, newest: 2, highest: 3, lowest: 4 };
+
 /**
  * Build a new POST body for the next pagination call by replacing the
- * [pageSize, token] tuple in the inner JSON at position [1].
+ * [pageSize, token] tuple in the inner JSON at position [1] and the sort
+ * order at position [12].
  *
  * The original body is URL-encoded form data:
  *   f.req=<encoded-outer-json>&...
  * where outer-json = [[["<service>", "<inner-as-string>", null, "generic"]]]
  */
-function buildPaginatedBody(originalBody, nextToken, pageSize) {
+function buildPaginatedBody(originalBody, nextToken, pageSize, sort = 'newest') {
   const params = new URLSearchParams(originalBody);
   const freq = params.get('f.req');
   if (!freq) throw new Error('original body has no f.req');
@@ -88,6 +113,9 @@ function buildPaginatedBody(originalBody, nextToken, pageSize) {
   const inner = JSON.parse(outer[0][0][1]);
   // inner[1] = [pageSize, nextToken]
   inner[1] = [pageSize, nextToken || ''];
+  const sortNum = REVIEW_SORTS[sort];
+  if (!sortNum) throw new Error(`unknown review sort: ${sort}`);
+  inner[12] = [sortNum];
   outer[0][0][1] = JSON.stringify(inner);
   params.set('f.req', JSON.stringify(outer));
   return params.toString();
@@ -101,6 +129,70 @@ function bumpReqId(url, step = 100000) {
   return url.replace(/([?&]_reqid=)(\d+)/, (_, p, n) => p + (parseInt(n, 10) + step));
 }
 
+// A stalled batchexecute response used to wedge the whole worker: neither
+// page.evaluate nor the in-page fetch has a default timeout, so an unanswered
+// request blocked one shard for minutes with no log line and no sidecar write
+// (measured: a 327 s stall mid-place on the sg_parks_473 run). Abort in-page
+// instead and report it as a retryable error, so the existing pause-and-retry
+// path handles it like a 429 rather than the worker hanging.
+const FETCH_TIMEOUT_MS = Number(process.env.REVIEW_FETCH_TIMEOUT_MS) || 45000;
+
+/**
+ * POST one batchexecute page from inside the page context, bounded by
+ * FETCH_TIMEOUT_MS. Resolves to { text } on success, { error: <status> } for a
+ * non-2xx response, or { error: 'timeout' } when the abort fires. Any other
+ * in-page failure is rethrown so the caller still records fetch_exception.
+ */
+// The in-page abort only fires if the renderer is alive to run its timer. When
+// the renderer itself wedges, page.evaluate never settles and the worker stops
+// dead — measured three times now: 327 s mid-place, 49 min in the photo phase,
+// and two Singapore shards frozen for over a day each while burning 6% CPU.
+// Playwright gives evaluate no timeout option, so race it in Node. Firing this
+// means the page is gone, not that the network was slow, so callers should
+// abandon the place rather than retry on the same page.
+const PAGE_EVAL_TIMEOUT_MS = Number(process.env.PAGE_EVAL_TIMEOUT_MS) || 90000;
+
+class PageEvalTimeout extends Error {
+  constructor(ms) { super(`page.evaluate did not settle within ${ms} ms`); this.name = 'PageEvalTimeout'; }
+}
+
+function evaluateWithTimeout(page, fn, arg, timeoutMs = PAGE_EVAL_TIMEOUT_MS) {
+  let timer;
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new PageEvalTimeout(timeoutMs)), timeoutMs);
+  });
+  // The evaluate promise stays pending on timeout — it cannot be cancelled —
+  // but the page is discarded right after, so nothing leaks beyond it.
+  return Promise.race([page.evaluate(fn, arg), guard]).finally(() => clearTimeout(timer));
+}
+
+function postBatchPage(page, url, body, headers) {
+  return evaluateWithTimeout(page, async ({ url, body, headers, timeoutMs }) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body,
+        signal: controller.signal,
+      });
+      if (!r.ok) return { error: r.status };
+      return { text: await r.text() };
+    } catch (e) {
+      if (e && e.name === 'AbortError') return { error: 'timeout' };
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }, { url, body, headers, timeoutMs: FETCH_TIMEOUT_MS })
+    .catch((e) => {
+      if (e instanceof PageEvalTimeout) return { error: 'page_timeout' };
+      throw e;
+    });
+}
+
 /**
  * Fetch all reviews for the current place via API pagination.
  *
@@ -109,6 +201,7 @@ function bumpReqId(url, step = 100000) {
  * @param {number} [opts.maxReviews=25000] - Stop after this many reviews
  * @param {number} [opts.pageSize=10] - Reviews per API page (10 is Google's default; 20 also works)
  * @param {number} [opts.delayMs=200] - Delay between API calls
+ * @param {string} [opts.reviewSort=newest] - relevant|newest|highest|lowest
  * @param {Function} [opts.onProgress] - Callback(count, total) for progress reporting
  * @param {Function} [opts.onFlush] - Callback(reviewsBatch) for incremental persistence
  * @param {Function} [opts.onPage] - Callback(latestReview, count, total) for transient live status
@@ -120,70 +213,12 @@ async function fetchAllReviews(page, opts = {}) {
     maxReviews = 25000,
     pageSize = 10,
     delayMs = 200,
+    reviewSort = 'newest',
     onProgress = null,
     onFlush = null,
     onPage = null,
     flushEvery = 100,
-    beforeRequest = null,
-    onRequestResult = null,
-    requestTimeoutMs = null,
   } = opts;
-
-  async function replayRequest(url, body, headers) {
-    let timing = beforeRequest ? await beforeRequest() : null;
-    const effectiveTimeoutMs = requestTimeoutMs || (timing && timing.requestTimeoutMs) || 30000;
-    const started = Date.now();
-    let result;
-    let evaluationWatchdog;
-    try {
-      const evaluation = page.evaluate(async ({ url: fetchUrl, body: fetchBody, fetchHeaders, timeoutMs }) => {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          const response = await fetch(fetchUrl, {
-            method: 'POST',
-            credentials: 'include',
-            headers: fetchHeaders,
-            body: fetchBody,
-            signal: controller.signal,
-          });
-          if (!response.ok) return { error: response.status };
-          return { text: await response.text() };
-        } catch (error) {
-          return { error: error && error.name === 'AbortError' ? 'request_timeout' : String(error && error.message || error) };
-        } finally {
-          clearTimeout(timeout);
-        }
-      }, { url, body, fetchHeaders: headers, timeoutMs: effectiveTimeoutMs });
-      const outerTimeoutMs = Math.ceil(effectiveTimeoutMs * 1.25);
-      const watchdog = new Promise((_, reject) => {
-        evaluationWatchdog = setTimeout(() => {
-          const error = new Error(`review page.evaluate made no progress for ${outerTimeoutMs}ms`);
-          error.code = 'EVALUATION_STALLED';
-          reject(error);
-        }, outerTimeoutMs);
-      });
-      result = await Promise.race([evaluation, watchdog]);
-    } catch (error) {
-      if (error && error.code === 'EVALUATION_STALLED') {
-        page.close().catch(() => {});
-        result = { error: 'evaluate_stalled' };
-      } else {
-        result = { error: `evaluate_failed:${String(error && error.message || error).slice(0, 100)}` };
-      }
-    } finally {
-      clearTimeout(evaluationWatchdog);
-    }
-    if (onRequestResult) {
-      timing = await onRequestResult({
-        success: !result.error,
-        structureComplete: typeof result.text === 'string' && result.text.length > 0,
-        placeCount: 0,
-        elapsedMs: Date.now() - started,
-      }) || timing;
-    }
-    return { ...result, timingPolicy: timing };
-  }
 
   // --- Step 1: Detect count + capture the first ListUgcPosts POST ---
   let capturedUrl = null;
@@ -193,8 +228,12 @@ async function fetchAllReviews(page, opts = {}) {
 
   const requestHandler = (req) => {
     const u = req.url();
-    if (capturedUrl) return;
     if (!u.includes('rpcids=' + REVIEW_RPC_ID)) return;
+    // Keep the most recent request rather than the first. Loading a place fires
+    // a preview call that answers with five reviews and no continuation token;
+    // replaying that one caps the place at five however many it actually has.
+    // The Reviews tab click fires the real feed request afterwards, so last
+    // wins — which is what the GET-era fetcher did.
     capturedUrl = u;
     capturedBody = req.postData() || '';
     // Google now enforces per-request anti-bot headers on the batchexecute
@@ -258,6 +297,7 @@ async function fetchAllReviews(page, opts = {}) {
   }
   page.off('request', requestHandler);
 
+
   if (!capturedBody) {
     return { reviews: [], detectedCount, error: 'api_url_not_captured', stopReason: 'api_url_not_captured' };
   }
@@ -273,28 +313,31 @@ async function fetchAllReviews(page, opts = {}) {
   let lastFlushAt = 0;
   let consecutiveEmpty = 0;
   let blocked = false;
-  let lastTiming = null;
   // Tracks the FIRST terminating break path (see all the `break;` below);
   // surfaced so callers can distinguish "Google ran out" from "we hit a bug".
   let stopReason = null;
   const startTime = Date.now();
 
   while (reviews.length < effectiveMax) {
-    const postBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
+    const postBody = buildPaginatedBody(capturedBody, nextToken, pageSize, reviewSort);
     const apiUrl = currentUrl;
 
     let inner;
     try {
-      const resp = await replayRequest(apiUrl, postBody, capturedHeaders);
-      lastTiming = resp.timingPolicy || lastTiming;
+      const resp = await postBatchPage(page, apiUrl, postBody, capturedHeaders);
 
       if (resp.error) {
-        if (resp.error === 429 || resp.error === 403) {
-          const retryDelayMs = (resp.timingPolicy && resp.timingPolicy.retryDelayMs) || 5000;
-          if (onProgress) onProgress(reviews.length, effectiveMax, `HTTP ${resp.error}, pausing ${retryDelayMs}ms...`);
-          await page.waitForTimeout(retryDelayMs);
-          const retry = await replayRequest(apiUrl, postBody, capturedHeaders);
-          lastTiming = retry.timingPolicy || lastTiming;
+        if (resp.error === 'page_timeout') {
+          // The renderer is gone. Retrying on this page would only wait out the
+          // guard again; review-scraper builds a fresh context for the next place.
+          stopReason = 'page_timeout';
+          break;
+        }
+        if (resp.error === 429 || resp.error === 403 || resp.error === 'timeout') {
+          const cause = resp.error === 'timeout' ? `request timeout after ${FETCH_TIMEOUT_MS / 1000}s` : `HTTP ${resp.error}`;
+          if (onProgress) onProgress(reviews.length, effectiveMax, `${cause}, pausing 10s...`);
+          await page.waitForTimeout(BLOCK_BACKOFF_MS);
+          const retry = await postBatchPage(page, apiUrl, postBody, capturedHeaders);
           if (retry.error) { blocked = true; stopReason = 'blocked_http_' + retry.error; break; }
           inner = parseBatchexecuteResponse(retry.text);
         } else {
@@ -309,7 +352,29 @@ async function fetchAllReviews(page, opts = {}) {
       break;
     }
 
-    if (!inner) { stopReason = 'parse_failure'; break; }
+    if (!inner) {
+      // A 200 whose body carries no wrb.fr envelope for our RPC. Observed on
+      // roughly a tenth of places on the first page, and a plain retry clears
+      // it, so treat it as transient rather than terminal — the old behaviour
+      // dropped the whole place with zero reviews. Record what came back so a
+      // persistent failure is diagnosable from the log instead of opaque.
+      if (onProgress) onProgress(reviews.length, effectiveMax, 'Unparseable response, retrying once...');
+      await page.waitForTimeout(BLOCK_BACKOFF_MS);
+      let retryParse;
+      try {
+        retryParse = await postBatchPage(page, apiUrl, postBody, capturedHeaders);
+      } catch (e) {
+        stopReason = 'parse_failure_retry_exception:' + (e && e.message || 'unknown').substring(0, 40);
+        break;
+      }
+      if (retryParse.error) { stopReason = 'parse_failure_retry_http_' + retryParse.error; break; }
+      inner = parseBatchexecuteResponse(retryParse.text);
+      if (!inner) {
+        stopReason = 'parse_failure';
+        console.error(`    [parse_failure] body[0..160]=${JSON.stringify((retryParse.text || '').slice(0, 160))}`);
+        break;
+      }
+    }
 
     // inner = [null, nextToken, reviewsArray]
     nextToken = inner[1] || '';
@@ -319,12 +384,10 @@ async function fetchAllReviews(page, opts = {}) {
       const coverage = detectedCount ? (reviews.length / detectedCount) : 1;
       if (coverage < 0.8) {
         // Suspect block — pause and retry
-        const retryDelayMs = (lastTiming && lastTiming.retryDelayMs) || 5000;
-        if (onProgress) onProgress(reviews.length, effectiveMax, `Empty page, suspect block, pausing ${retryDelayMs}ms...`);
-        await page.waitForTimeout(retryDelayMs);
-        const retryBody = buildPaginatedBody(capturedBody, nextToken, pageSize);
-        const retryResp = await replayRequest(apiUrl, retryBody, capturedHeaders);
-        lastTiming = retryResp.timingPolicy || lastTiming;
+        if (onProgress) onProgress(reviews.length, effectiveMax, 'Empty page, suspect block, pausing 10s...');
+        await page.waitForTimeout(BLOCK_BACKOFF_MS);
+        const retryBody = buildPaginatedBody(capturedBody, nextToken, pageSize, reviewSort);
+        const retryResp = await postBatchPage(page, apiUrl, retryBody, capturedHeaders);
         if (retryResp.error) { blocked = true; stopReason = 'blocked_low_coverage_http_' + retryResp.error; break; }
         const retryInner = parseBatchexecuteResponse(retryResp.text);
         if (!retryInner || !Array.isArray(retryInner[2]) || retryInner[2].length === 0) {
@@ -447,6 +510,7 @@ async function fetchAllReviews(page, opts = {}) {
     stopReason = reviews.length >= effectiveMax ? 'reached_max' : 'loop_exit';
   }
 
+
   if (onFlush && reviews.length > lastFlushAt) {
     onFlush(reviews.slice(lastFlushAt));
   }
@@ -466,4 +530,6 @@ async function fetchAllReviews(page, opts = {}) {
   };
 }
 
-module.exports = { fetchAllReviews };
+// Helpers are exported for the pagination diagnostics in TEST/; fetchAllReviews
+// stays the only supported entry point for production callers.
+module.exports = { fetchAllReviews, parseBatchexecuteResponse, buildPaginatedBody, bumpReqId, postBatchPage, evaluateWithTimeout, PageEvalTimeout, REVIEW_SORTS };

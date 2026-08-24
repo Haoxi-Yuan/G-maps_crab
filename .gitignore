@@ -1,18 +1,17 @@
-# === Legacy code (不上传) ===
-scraper/
-
 # === Dependencies ===
 node_modules/
-Pipeline/venv/
-Pipeline/__pycache__/
+**/node_modules/
+**/.venv/
+**/.venv-*/
+**/__pycache__/
+*.py[cod]
 
 # === Data & Output (所有生成数据) ===
-Pipeline/data/
-time_scraper/output/
-time_scraper/data/
-time_scraper/db/
-time_scraper/logs/
-*.ndjson
+**/data/
+**/output/
+**/logs/
+**/.playwright-browsers/
+**/.tmp/
 *.checkpoint.json
 *.state.json
 
@@ -20,8 +19,11 @@ time_scraper/logs/
 *.log
 *.pid
 
-# === Proxy/Sensitive config ===
-time_scraper/config/proxy-config-*.json
+# === Secrets ===
+**/.secrets/
+**/.env
+**/.env.*
+!**/.env.example
 
 # === IDE ===
 .vscode/
@@ -40,12 +42,18 @@ Thumbs.db
 *.bak
 *.pre_truncate
 
-# === Frontend build & cache ===
-time_scraper/frontend/dist/
-time_scraper/frontend/.vite/
+# === Frontend/build cache ===
+**/dist/
+**/.vite/
+**/.build/
+**/.build-*/
 
 # === Database ===
 *.sqlite
+*.sqlite3
+*.db
+*.db-*
 
 # === Workspace ===
 *.code-workspace
+!archive/**/*.code-workspace

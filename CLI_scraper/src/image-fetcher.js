@@ -25,8 +25,6 @@ const https = require('https');
 const Database = require('better-sqlite3');
 const { makeProxyAgent } = require('./proxy-fetch');
 
-let GLOBAL_IMAGE_LIMITER = null;
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  Manifest schema + helpers (shared between this worker and the wizard)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -487,33 +485,10 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
     UPDATE blobs SET attempts = attempts + 1, last_error = ?, status = ?
     WHERE sha = ?
   `);
-  let requestRecorded = false;
-  let requestTiming = null;
-  let requestStarted = null;
   try {
-    if (GLOBAL_IMAGE_LIMITER) {
-      try { requestTiming = await GLOBAL_IMAGE_LIMITER.beforeRequest(); }
-      catch (error) {
-        error.schedulerBudgetUnavailable = true;
-        throw error;
-      }
-    }
-    requestStarted = Date.now();
-    const { buf, mime } = await fetchBuffer(
-      blob.url_full,
-      (requestTiming && requestTiming.requestTimeoutMs) || 20000,
-    );
+    const { buf, mime } = await fetchBuffer(blob.url_full);
     if (!buf || buf.length < 1024) {
       throw new Error(`payload too small (${buf?.length || 0} bytes)`);
-    }
-    if (GLOBAL_IMAGE_LIMITER) {
-      await GLOBAL_IMAGE_LIMITER.onResult({
-        success: true,
-        structureComplete: true,
-        placeCount: 1,
-        elapsedMs: Date.now() - requestStarted,
-      });
-      requestRecorded = true;
     }
     const finalAbs = await writeBlobAtomically(blobsRoot, blob.sha, buf);
     const rel = path.relative(imagesRoot, finalAbs);
@@ -535,17 +510,6 @@ async function processBlob(db, task, blob, imagesRoot, blobsRoot) {
       }
     }
   } catch (e) {
-    // A database/rate-budget outage is not an image failure and must not burn
-    // the blob's retry counter. Leave it pending for the next worker pass.
-    if (e.schedulerBudgetUnavailable) throw e;
-    if (GLOBAL_IMAGE_LIMITER && !requestRecorded) {
-      await GLOBAL_IMAGE_LIMITER.onResult({
-        success: false,
-        structureComplete: false,
-        placeCount: 0,
-        elapsedMs: requestStarted ? Date.now() - requestStarted : 0,
-      }).catch(() => {});
-    }
     const attempts = (blob.attempts || 0) + 1;
     const dead = attempts >= task.max_retries;
     bumpAttempt.run(String(e.message || e).slice(0, 200), dead ? 'dead' : 'failed', blob.sha);
@@ -647,9 +611,6 @@ async function workerLoop(db, task, imagesRoot) {
       catch (e) {
         if (e.retryAfter) {
           rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + e.retryAfter * 1000);
-        }
-        if (e.schedulerBudgetUnavailable) {
-          rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + 5000);
         }
       }
       finally { sem.release(); }
@@ -782,27 +743,6 @@ async function main() {
     process.exit(2);
   }
 
-  const schedulerWorkflow = args['scheduler-workflow'] || process.env.GMAPS_SCHEDULER_WORKFLOW || null;
-  let closeScheduler = async () => {};
-  if (schedulerWorkflow) {
-    const { createSchedulerBackend } = require('./scheduler/backend');
-    const backend = createSchedulerBackend({
-      applicationName: `gmaps-images:${schedulerWorkflow}:${process.pid}`,
-      max: 3,
-    });
-    const scheduler = backend.scheduler;
-    closeScheduler = backend.close;
-    const workerId = `${require('os').hostname()}:${process.pid}:images`;
-    await scheduler.registerWorker(schedulerWorkflow, workerId, 'images', {
-      taskId,
-      schedulerTransport: backend.transport,
-    });
-    GLOBAL_IMAGE_LIMITER = {
-      beforeRequest: () => scheduler.waitForBudget(schedulerWorkflow, 'images'),
-      onResult: (result) => scheduler.recordRequestOutcome(schedulerWorkflow, 'images', result),
-    };
-  }
-
   // Source-IP binding: egress via a specific local interface (the NUS tunnel)
   // so downloads dodge the GFW-blocked default route. Precedence:
   //   --bind flag > IMAGE_BIND_IP env > task.bind_ip (from DB).
@@ -854,7 +794,6 @@ async function main() {
   } finally {
     clearInterval(progT);
     db.close();
-    await closeScheduler().catch(() => {});
   }
   console.log(`[task ${taskId}] exit`);
 }

@@ -1,21 +1,31 @@
 {
-  "name": "time_scraper",
+  "name": "gmaps-crab-cli",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
+  "description": "Cross-platform CLI pipeline for Google Maps boundaries, POIs, reviews, SQLite exports, and image downloads.",
+  "main": "bin/gmaps-crab.js",
   "scripts": {
-    "scheduler:api": "node src/scheduler-api.js",
-    "test": "node --test test/scheduler/*.test.js",
-    "test:scheduler": "node --test test/scheduler/*.test.js"
+    "start": "node bin/gmaps-crab.js",
+    "bootstrap": "node scripts/bootstrap.js",
+    "manifest": "node scripts/create-run-manifest.js",
+    "check:syntax": "node --check bin/gmaps-crab.js && node --check src/cli/run-poi.js && node --check src/cli/run-reviews.js && node --check scripts/bootstrap.js && node --check scripts/create-run-manifest.js && node --check ../tools/local-monitor/monitor.js",
+    "check:ndjson-keys": "node scripts/check-ndjson-key-coverage.js --self-test",
+    "check:ndjson-mapping": "node scripts/check-ndjson-sqlite-mapping.js --self-test",
+    "test:review-db-upsert": "node test/test-review-db-upsert.js",
+    "test:db-image-downloader": "node test/test-download-db-images.js",
+    "test:photo-url-refresh": "node test/test-photo-url-refresh.js",
+    "test:poi-resume": "node test/test-poi-resume.js",
+    "test": "npm run check:syntax && npm run check:ndjson-keys && npm run check:ndjson-mapping && npm run test:review-db-upsert && npm run test:db-image-downloader && npm run test:photo-url-refresh && npm run test:poi-resume"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@turf/turf": "^7.3.2",
     "better-sqlite3": "^11.0.0",
-    "pg": "^8.23.0",
-    "pg-query-stream": "^4.17.0",
     "playwright": "^1.57.0",
     "playwright-extra": "^4.3.6",
     "proj4": "^2.20.4",

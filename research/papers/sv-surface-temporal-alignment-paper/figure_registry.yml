@@ -1,0 +1,62 @@
+figures:
+  - id: fig01
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_01_conceptual_pipeline.png
+    source_paths:
+      - research_log/sv-surface-temporal-alignment-paper/figures/generated_bases/fig_01_conceptual_pipeline_base.png
+      - research_log/sv-surface-temporal-alignment-paper/figures/generated_bases/imagegen_prompts.md
+    generation: "Generated text-free scientific schematic background with exact labels and formulas overlaid programmatically."
+    evidence_use: "Frames the analytic move from panorama images to world-space surface factors."
+  - id: fig02
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_02_data_acquisition.svg
+    source_paths:
+      - TEST/data/catalog/validation_report.json
+      - TEST/data/catalog/sv3d.duckdb
+    generation: "Information-dense SVG generated from exact file names, catalog tables, field names and validation counts."
+    evidence_use: "Documents the one-time raw data capture block and the metadata fields that enable 3D inference."
+  - id: fig03
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_03_geometry_decoding_case.png
+    source_paths:
+      - TEST/data/diagnostics/ghim_moh_market_food_centre/indexmap_overlay/JqSnKB7Pp-XymzXWDuP71w_overlay.png
+      - TEST/data/intermediate/ghim_moh_market_food_centre/01_depthmap_pointcloud_baseline/merged_pointcloud.npz
+    generation: "Composed from a high-quality indexmap overlay and a fixed random sample of the merged RGB point cloud."
+    evidence_use: "Shows the transition from categorical indexmap alignment to metric colored 3D evidence."
+  - id: fig04
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_04_world_transform_validation.png
+    source_paths:
+      - TEST/data/intermediate/ghim_moh_market_food_centre/03_planes_world/ground_normal_validation.png
+      - TEST/src/py/diagnostics/filter_and_rectify.py
+      - TEST/src/py/derive/derive_planes_world.py
+    generation: "Composed from ground normal validation diagnostics and the pose transform implemented in code."
+    evidence_use: "Connects the local-to-world rotation formula with a visible validation of ground normal clustering."
+  - id: fig05
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_05_factor_topology_gid0011.png
+    source_paths:
+      - TEST/data/catalog/sv3d.duckdb
+    generation: "Programmatic top-down topology plot from pano_observations, global_factor_sources, factor_geometries and visible_pois."
+    evidence_use: "Shows how one global factor is supported by multiple panos and linked to local spatial references."
+  - id: fig06
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_06_catalog_schema.svg
+    source_paths:
+      - TEST/schema/sv3d_catalog.sql
+      - TEST/data/catalog/sv3d.duckdb
+    generation: "Large information-first SVG generated from DuckDB PRAGMA table_info and table row counts; every shown field name is an exact catalog column."
+    evidence_use: "Explains how raw files, parsed geometry, surface products and temporal evidence remain queryable."
+  - id: fig07
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_07_surface_atlas_gid0057_selected.png
+    source_paths:
+      - TEST/data/catalog/sv3d.duckdb
+    generation: "Curated paper figure composed from gid_0057 rectified source observations and pixel-fused atlas texture; visible content is cropped before fitting."
+    evidence_use: "Shows plane-rectified multi-pano candidates without the full diagnostic overview density."
+  - id: fig08
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_08_temporal_alignment_gid0057_selected.png
+    source_paths:
+      - TEST/data/diagnostics/ghim_moh_market_food_centre/surface_fusion/top30_best_hd_projection_allfacade/temporal_rectified_observations.csv
+    generation: "Curated temporal strip selected from accepted gid_0057 temporal observations using visual readability scoring."
+    evidence_use: "Shows cross-year rectification for one stable factor without using the full dense diagnostic grid."
+  - id: fig09
+    output: research_log/sv-surface-temporal-alignment-paper/figures/fig_09_top_factor_readable_matrix.png
+    source_paths:
+      - TEST/data/diagnostics/ghim_moh_market_food_centre/surface_fusion/temporal_spacetime_top30_best_hd_rank.csv
+      - TEST/data/diagnostics/ghim_moh_market_food_centre/surface_fusion/top30_best_hd_projection_allfacade/temporal_rectified_observations.csv
+    generation: "Curated 3-factor x 4-year matrix selected from top30 accepted cells using visual occupancy/readability plus temporal acceptance status."
+    evidence_use: "Summarizes the final result in a page-readable subset while preserving full top30 diagnostics as source evidence."

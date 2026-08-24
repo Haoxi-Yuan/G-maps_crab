@@ -26,8 +26,6 @@ const { chromium } = require('playwright');
 const stealth = require('./stealth');
 const { fetchAllReviews } = require('./api-review-fetcher');
 const { makeSessionCapturer, fetchAllPhotoCategories } = require('./photo-category-fetcher');
-const { timingPolicy } = require('./scheduler/adaptive-timing');
-const { acquireLaunchSlot } = require('./scheduler/node-launch-gate');
 
 const CONFIG = {
   maxReviews: 50000,
@@ -280,24 +278,6 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
   const maxReviews = opts.maxReviews || CONFIG.maxReviews;
   const logFile = outputFile.replace(/\.ndjson$/, '.log');
   const liveStatusFile = opts.liveStatusFile || outputFile.replace(/\.ndjson$/, '.live.json');
-  const schedulerWorkflow = opts.schedulerWorkflow || process.env.GMAPS_SCHEDULER_WORKFLOW || null;
-  let scheduler = null;
-  let closeScheduler = async () => {};
-  const schedulerWorkerId = `${require('os').hostname()}:${process.pid}:reviews`;
-  if (schedulerWorkflow) {
-    const { createSchedulerBackend } = require('./scheduler/backend');
-    const backend = createSchedulerBackend({
-      applicationName: `gmaps-reviews:${schedulerWorkflow}:${schedulerWorkerId}`,
-      max: 3,
-    });
-    scheduler = backend.scheduler;
-    closeScheduler = backend.close;
-    await scheduler.registerWorker(schedulerWorkflow, schedulerWorkerId, 'reviews', {
-      inputFile: path.resolve(inputFile),
-      outputFile: path.resolve(outputFile),
-      schedulerTransport: backend.transport,
-    });
-  }
 
   // Log rotation
   if (fs.existsSync(logFile)) {
@@ -473,44 +453,8 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   }
 
-  const launchBrowser = async () => {
-    const launchTiming = scheduler
-      ? await scheduler.getTimingPolicy(schedulerWorkflow, 'browser_launch')
-      : timingPolicy('browser_launch');
-    const gateRoot = process.env.GMAPS_NODE_LAUNCH_GATE
-      || path.join('/tmp', `${process.env.USER || 'gmaps'}-browser-launch-gate`);
-    const gate = await acquireLaunchSlot(gateRoot, {
-      slots: Number(process.env.GMAPS_BROWSER_LAUNCH_SLOTS || 2),
-      timeoutMs: launchTiming.requestTimeoutMs,
-      staleMs: launchTiming.requestTimeoutMs * 2,
-      pollMs: Math.max(100, Math.min(1000, Math.round(launchTiming.meanMs / 10))),
-    });
-    const started = Date.now();
-    let instance;
-    try {
-      instance = await chromium.launch({
-        headless: true,
-        timeout: launchTiming.requestTimeoutMs,
-        args: stealth.buildLaunchArgs(),
-      });
-      if (scheduler) {
-        await scheduler.recordOperationLatency(
-          schedulerWorkflow,
-          'browser_launch',
-          Date.now() - started,
-        );
-      }
-      return instance;
-    } catch (error) {
-      if (instance) await instance.close().catch(() => {});
-      throw error;
-    } finally {
-      gate.release();
-    }
-  };
-
   // Launch browser
-  let browser = await launchBrowser();
+  let browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
 
   let processed = 0;
   let totalReviews = 0;
@@ -551,7 +495,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
       if (processed > 0 && processed % 200 === 0) {
         log(`  [MEMORY] Restarting browser after ${processed} places...`);
         try { await browser.close(); } catch (_) {}
-        browser = await launchBrowser();
+        browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
       }
 
       // Fresh context + page per place
@@ -564,7 +508,7 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         // Browser may have crashed, restart
         log(`  Browser error, restarting: ${e.message}`);
         try { await browser.close(); } catch (_) {}
-        browser = await launchBrowser();
+        browser = await chromium.launch({ headless: true, args: stealth.buildLaunchArgs() });
         const result = await stealth.createStealthContext(browser, {});
         context = result.context;
         page = result.page;
@@ -593,45 +537,17 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
 
         // Two-step load
         log('  Loading page...');
-        const navigationTiming = scheduler
-          ? await scheduler.getTimingPolicy(schedulerWorkflow, 'page_navigation')
-          : null;
-        const navigationTimeoutMs = navigationTiming
-          ? navigationTiming.requestTimeoutMs
-          : CONFIG.pageLoadTimeout;
-        const postNavigationWaitMs = navigationTiming
-          ? Math.max(500, Math.min(3000, navigationTiming.meanMs))
-          : 2000;
-        let navigationStarted = Date.now();
         await page.goto(`https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${pid}`, {
-          waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs
+          waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout
         });
-        if (scheduler) {
-          await scheduler.recordOperationLatency(
-            schedulerWorkflow,
-            'page_navigation',
-            Date.now() - navigationStarted,
-          );
-        }
-        await page.waitForTimeout(postNavigationWaitMs);
+        await page.waitForTimeout(2000);
 
         const placeUrl = isFtid
           ? `https://www.google.com/maps/place/?ftid=${pid}&hl=en`
           : `https://www.google.com/maps/place/?q=place_id:${pid}&hl=en`;
-        navigationStarted = Date.now();
-        await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: navigationTimeoutMs });
-        if (scheduler) {
-          await scheduler.recordOperationLatency(
-            schedulerWorkflow,
-            'page_navigation',
-            Date.now() - navigationStarted,
-          );
-        }
-        const selectorTimeoutMs = navigationTiming
-          ? Math.max(3000, Math.min(navigationTimeoutMs, navigationTiming.meanMs * 2))
-          : 15000;
-        await page.waitForSelector('h1', { timeout: selectorTimeoutMs }).catch(() => {});
-        await page.waitForTimeout(postNavigationWaitMs);
+        await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
+        await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
+        await page.waitForTimeout(2000);
 
         page.off('response', previewHandler);
         photoSession.detach();
@@ -643,17 +559,11 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
         let flushedCount = 0;
         let lastLiveWrite = 0;
 
-        const reviewResult = await fetchAllReviews(page, {
+        const fetchOpts = {
           maxReviews,
           pageSize: CONFIG.pageSize,
           delayMs: CONFIG.delayMs,
           flushEvery: 100,
-          beforeRequest: scheduler
-            ? () => scheduler.waitForBudget(schedulerWorkflow, 'reviews')
-            : null,
-          onRequestResult: scheduler
-            ? (result) => scheduler.recordRequestOutcome(schedulerWorkflow, 'reviews', result)
-            : null,
           onProgress: (count, total, msg) => {
             if (msg) log(`    ${msg}`);
             else log(`    progress: ${count}/${total}`);
@@ -682,7 +592,44 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
               message: null,
             });
           },
-        });
+        };
+        let reviewResult = await fetchAllReviews(page, fetchOpts);
+
+        // Loading a place fires a preview call that answers with five reviews
+        // and no continuation token; when that is what got replayed the place
+        // finishes far short on an otherwise clean stop. A fresh page load and
+        // a second ask return the full set, so retry once and keep whichever
+        // attempt saw more. Only low-coverage results qualify, which bounds the
+        // extra work to places that were going to be wrong anyway.
+        if (
+          reviewResult.detectedCount &&
+          reviewResult.reviews.length < reviewResult.detectedCount * 0.5 &&
+          !reviewResult.blocked
+        ) {
+          log(`  Only ${reviewResult.reviews.length}/${reviewResult.detectedCount} on a clean stop, retrying in a fresh context`);
+          try {
+            // A reload alone is not enough — the stub persists for the life of
+            // the browser context. A brand new context asks cleanly and returns
+            // the full set, which is what the isolated reproductions showed.
+            await page.close().catch(() => {});
+            await context.close().catch(() => {});
+            const fresh = await stealth.createStealthContext(browser, {});
+            context = fresh.context;
+            page = fresh.page;
+            await page.goto(`https://www.google.com/maps/search/?api=1&query=Google&query_place_id=${pid}`, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
+            await page.waitForTimeout(2000);
+            await page.goto(placeUrl, { waitUntil: 'domcontentloaded', timeout: CONFIG.pageLoadTimeout });
+            await page.waitForSelector('h1', { timeout: 15000 }).catch(() => {});
+            await page.waitForTimeout(2000);
+            const retryResult = await fetchAllReviews(page, fetchOpts);
+            if (retryResult.reviews.length > reviewResult.reviews.length) {
+              log(`  Retry recovered ${retryResult.reviews.length}/${retryResult.detectedCount}`);
+              reviewResult = retryResult;
+            }
+          } catch (e) {
+            log(`  Retry failed, keeping first attempt: ${String(e.message || e).slice(0, 80)}`);
+          }
+        }
 
         // Clean up partial file (data is now in reviewResult.reviews)
         try { fs.unlinkSync(partialFile); } catch (e) {}
@@ -767,7 +714,6 @@ async function scrapeReviews(inputFile, outputFile, opts = {}) {
     }
   } finally {
     await browser.close().catch(() => {});
-    await closeScheduler().catch(() => {});
   }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -801,7 +747,6 @@ if (require.main === module) {
       case '--output': outputFile = args[++i]; break;
       case '--max-reviews': opts.maxReviews = parseInt(args[++i]); break;
       case '--live-status': opts.liveStatusFile = args[++i]; break;
-      case '--scheduler-workflow': opts.schedulerWorkflow = args[++i]; break;
       case '--help':
         console.log(`
 Review Scraper
@@ -814,7 +759,6 @@ Options:
   --output <file>      Output file (default: reviews.ndjson in same dir)
   --max-reviews <n>    Max reviews per place (default: 50000)
   --live-status <file>  Atomically replaced live status JSON (default: reviews.live.json)
-  --scheduler-workflow <id>  Use the global 'reviews' request budget (PostgreSQL or HTTPS API)
 `);
         process.exit(0);
     }

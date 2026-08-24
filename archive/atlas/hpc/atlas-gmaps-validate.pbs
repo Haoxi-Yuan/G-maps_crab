@@ -1,0 +1,23 @@
+#!/bin/bash
+#PBS -N sgp_check
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=00:20:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+test -s "$SIF"
+cd "$PROJECT"
+
+singularity exec -B /hpctmp:/hpctmp "$SIF" \
+  node "$PROJECT/scripts/validate-poi-batch.js" \
+    --boundaries "$PROJECT/data/Park_singapore/473parks.geojson" \
+    --name sg_parks_473 \
+    --expected 473

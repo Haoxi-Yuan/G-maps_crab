@@ -16,6 +16,14 @@ const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 
+function pythonExecutable() {
+  const candidate = process.platform === 'win32'
+    ? path.join(ROOT, '.venv', 'Scripts', 'python.exe')
+    : path.join(ROOT, '.venv', 'bin', 'python3');
+  if (fs.existsSync(candidate)) return candidate;
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
 function ask(rl, q, def) {
   return new Promise((resolve) => {
     const suffix = def !== undefined && def !== '' ? ` [${def}]` : '';
@@ -173,8 +181,7 @@ async function main() {
           center: c.center,
           area_km2: c.area_km2,
         }))));
-        const venvPy = path.join(ROOT, '.venv', 'bin', 'python3');
-        const pyBin = fs.existsSync(venvPy) ? venvPy : 'python3';
+        const pyBin = pythonExecutable();
         const pyScript = path.join(ROOT, 'src', 'cli', 'render-candidates-overview.py');
         await new Promise((resolve, reject) => {
           const child = spawn(pyBin, [
@@ -390,8 +397,7 @@ async function main() {
       const pointsPath = path.join(ROOT, outputDir, `${slug}_points.geojson`);
       const outPath = path.join(ROOT, outputDir, `${slug}_map.png`);
       const pyScript = path.join(ROOT, 'src', 'cli', 'render-boundary-map.py');
-      const venvPy = path.join(ROOT, '.venv', 'bin', 'python3');
-      const pyBin = fs.existsSync(venvPy) ? venvPy : 'python3';
+      const pyBin = pythonExecutable();
 
       const pyArgs = [pyScript,
         '--boundary', boundaryPath,

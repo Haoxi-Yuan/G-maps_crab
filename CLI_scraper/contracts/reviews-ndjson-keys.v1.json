@@ -1,0 +1,164 @@
+{
+  "contractVersion": 2,
+  "description": "Independent NDJSON-to-SQLite retention contract. Each known source key declares its expected SQLite destination; this file must not be generated from the production mapper.",
+  "groups": {
+    "top": {
+      "unknownKeys": "reject",
+      "fields": {
+        "business": { "destination": "businesses.*", "retention": "container", "nested": { "group": "business", "shape": "object" } },
+        "_meta": { "destination": "businesses.source_meta", "retention": "json", "nested": { "group": "meta", "shape": "object" } },
+        "openingHours": { "destination": "businesses.opening_hours", "retention": "json", "nestedPolicy": "open" },
+        "popularTimes": { "destination": "businesses.popular_times", "retention": "json", "nestedPolicy": "open" },
+        "about": { "destination": "businesses.about", "retention": "json", "nestedPolicy": "open" },
+        "metadata": { "destination": "businesses.metadata", "retention": "json", "nestedPolicy": "open" },
+        "sourceUrl": { "destination": "businesses.source_url", "retention": "scalar" },
+        "extractedAt": { "destination": "businesses.extracted_at", "retention": "scalar" },
+        "cleanedAt": { "destination": "businesses.cleaned_at", "retention": "scalar" },
+        "mergedAt": { "destination": "businesses.source_merged_at", "retention": "scalar" },
+        "imageBatch": { "destination": "businesses.image_batch", "retention": "scalar" },
+        "scraped_categories": { "destination": "businesses.scraped_categories", "retention": "json" },
+        "detailedReviews": { "destination": "reviews.*", "retention": "container", "nested": { "group": "review", "shape": "array" } },
+        "photoCategories": { "destination": "businesses.photo_categories", "retention": "json", "nested": { "group": "photoCategory", "shape": "array" } },
+        "_error": { "destination": "businesses.scrape_error", "retention": "scalar-or-json", "nestedPolicy": "open" },
+        "_network_error": { "destination": "businesses.network_error", "retention": "boolean" },
+        "_placeholder": { "destination": "businesses.is_placeholder", "retention": "boolean" }
+      }
+    },
+    "business": {
+      "unknownKeys": "reject",
+      "fields": {
+        "placeId": { "destination": "businesses.place_id", "retention": "scalar" },
+        "name": { "destination": "businesses.name", "retention": "scalar" },
+        "fullAddress": { "destination": "businesses.full_address", "retention": "scalar" },
+        "address": { "destination": "businesses.address", "retention": "json" },
+        "latitude": { "destination": "businesses.latitude", "retention": "scalar", "preferredOver": "business.coordinates.lat" },
+        "longitude": { "destination": "businesses.longitude", "retention": "scalar", "preferredOver": "business.coordinates.lng" },
+        "coordinates": { "destination": ["businesses.latitude", "businesses.longitude"], "retention": "mapped-children", "nested": { "group": "coordinates", "shape": "object" } },
+        "rating": { "destination": "businesses.rating", "retention": "scalar" },
+        "reviewCount": { "destination": "businesses.review_count", "retention": "scalar" },
+        "phone": { "destination": "businesses.phone", "retention": "scalar" },
+        "website": { "destination": "businesses.website", "retention": "scalar" },
+        "plusCode": { "destination": "businesses.plus_code", "retention": "scalar" },
+        "mainCategory": { "destination": "businesses.main_category", "retention": "scalar" },
+        "categories": { "destination": "businesses.categories", "retention": "json" },
+        "priceRange": { "destination": "businesses.price_range", "retention": "scalar" },
+        "categoryIds": { "destination": "businesses.scraped_categories", "retention": "json" },
+        "photos": { "destination": "businesses.business_photos", "retention": "json" },
+        "chijId": { "destination": "businesses.chij_id", "retention": "scalar" },
+        "googleId": { "destination": "businesses.google_id", "retention": "scalar" },
+        "timezone": { "destination": "businesses.timezone", "retention": "scalar" },
+        "neighborhood": { "destination": "businesses.neighborhood", "retention": "scalar" },
+        "identityBadges": { "destination": "businesses.identity_badges", "retention": "json", "nestedPolicy": "open" },
+        "ownerInfo": { "destination": "businesses.owner_info", "retention": "json", "nestedPolicy": "open" },
+        "serviceOptions": { "destination": "businesses.service_options", "retention": "json", "nestedPolicy": "open" },
+        "description": { "destination": "businesses.description", "retention": "scalar-or-json", "nestedPolicy": "open" }
+      }
+    },
+    "coordinates": {
+      "unknownKeys": "reject",
+      "fields": {
+        "lat": { "destination": "businesses.latitude", "retention": "scalar", "fallbackFor": "business.latitude" },
+        "lng": { "destination": "businesses.longitude", "retention": "scalar", "fallbackFor": "business.longitude" }
+      }
+    },
+    "meta": {
+      "unknownKeys": "reject",
+      "fields": {
+        "placeId": {
+          "destination": ["businesses.source_meta", "businesses.place_id"],
+          "retention": "json-and-scalar",
+          "assertions": [
+            { "destination": "businesses.source_meta", "encoding": "group-json" },
+            { "destination": "businesses.place_id", "encoding": "scalar" }
+          ]
+        },
+        "sourceUrl": {
+          "destination": ["businesses.source_meta", "businesses.source_url"],
+          "retention": "json-and-scalar",
+          "assertions": [
+            { "destination": "businesses.source_meta", "encoding": "group-json" },
+            { "destination": "businesses.source_url", "encoding": "scalar" }
+          ]
+        },
+        "chijId": {
+          "destination": ["businesses.source_meta", "businesses.chij_id"],
+          "retention": "json-and-scalar",
+          "assertions": [
+            { "destination": "businesses.source_meta", "encoding": "group-json" },
+            { "destination": "businesses.chij_id", "encoding": "scalar" }
+          ]
+        },
+        "googleId": {
+          "destination": ["businesses.source_meta", "businesses.google_id"],
+          "retention": "json-and-scalar",
+          "assertions": [
+            { "destination": "businesses.source_meta", "encoding": "group-json" },
+            { "destination": "businesses.google_id", "encoding": "scalar" }
+          ]
+        },
+        "timezone": {
+          "destination": ["businesses.source_meta", "businesses.timezone"],
+          "retention": "json-and-scalar",
+          "assertions": [
+            { "destination": "businesses.source_meta", "encoding": "group-json" },
+            { "destination": "businesses.timezone", "encoding": "scalar" }
+          ]
+        },
+        "neighborhood": {
+          "destination": ["businesses.source_meta", "businesses.neighborhood"],
+          "retention": "json-and-scalar",
+          "assertions": [
+            { "destination": "businesses.source_meta", "encoding": "group-json" },
+            { "destination": "businesses.neighborhood", "encoding": "scalar" }
+          ]
+        }
+      }
+    },
+    "review": {
+      "unknownKeys": "reject",
+      "fields": {
+        "review_id": { "destination": "reviews.review_id", "retention": "scalar" },
+        "rating": { "destination": "reviews.rating", "retention": "scalar" },
+        "review_text": { "destination": "reviews.review_text", "retention": "scalar" },
+        "published_at": { "destination": "reviews.published_at", "retention": "scalar" },
+        "published_at_date": { "destination": "reviews.published_at_date", "retention": "scalar" },
+        "reviewer_name": { "destination": "reviews.reviewer_name", "retention": "scalar" },
+        "reviewer_link": { "destination": "reviews.reviewer_link", "retention": "scalar" },
+        "reviewer_photo_count": { "destination": "reviews.reviewer_photo_count", "retention": "scalar" },
+        "reviewer_review_count": { "destination": "reviews.reviewer_review_count", "retention": "scalar" },
+        "is_local_guide": { "destination": "reviews.is_local_guide", "retention": "boolean" },
+        "review_likes_count": { "destination": "reviews.review_likes_count", "retention": "scalar" },
+        "response_from_owner_text": { "destination": "reviews.response_from_owner_text", "retention": "scalar" },
+        "response_from_owner_ago": { "destination": "reviews.response_from_owner_ago", "retention": "scalar" },
+        "edited_at_date": { "destination": "reviews.edited_at_date", "retention": "scalar" },
+        "_timestamp_us": { "destination": "reviews.timestamp_us", "retention": "json" },
+        "review_images": { "destination": "reviews.review_images_java", "retention": "json" },
+        "local_image_paths": { "destination": "reviews.local_image_paths", "retention": "json" },
+        "extra": { "destination": "reviews.extra", "retention": "json", "nestedPolicy": "open" },
+        "review_images_scraped": { "destination": "reviews.review_images_scraped", "retention": "json" },
+        "_source": { "destination": "reviews.source", "retention": "scalar" },
+        "has_owner_response": { "destination": "reviews.has_owner_response", "retention": "boolean" }
+      }
+    },
+    "photoCategory": {
+      "unknownKeys": "reject",
+      "fields": {
+        "key": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "label": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "totalCount": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "photoCount": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "photos": { "destination": "businesses.photo_categories", "retention": "json-member", "nested": { "group": "photo", "shape": "array" } }
+      }
+    },
+    "photo": {
+      "unknownKeys": "reject",
+      "fields": {
+        "id": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "mediaType": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "url": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "w": { "destination": "businesses.photo_categories", "retention": "json-member" },
+        "h": { "destination": "businesses.photo_categories", "retention": "json-member" }
+      }
+    }
+  }
+}

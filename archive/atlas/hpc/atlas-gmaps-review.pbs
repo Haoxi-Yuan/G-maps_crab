@@ -1,0 +1,24 @@
+#!/bin/bash
+#PBS -q parallel
+#PBS -l select=1:ncpus=12:mem=24gb
+#PBS -l walltime=240:00:00
+#PBS -j oe
+
+set -Eeuo pipefail
+
+: "${GROUP:?qsub must provide GROUP=1..8}"
+
+BASE=/hpctmp/haoxi.yuan/gmaps_atlas
+PROJECT="$BASE/CLI_scraper"
+SIF="$BASE/images/playwright-1.57.0-noble.sif"
+
+module load singularity/3.8.3
+unset LD_PRELOAD
+test -s "$SIF"
+test -d "$PROJECT/node_modules/playwright"
+
+export SINGULARITYENV_GROUP="$GROUP"
+export SINGULARITYENV_PBS_JOBID="${PBS_JOBID:-manual}"
+
+singularity exec -B /hpctmp:/hpctmp -B /tmp:/tmp "$SIF" \
+  "$PROJECT/scripts/hpc/atlas-gmaps-review-runner.sh"

@@ -47,7 +47,6 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
 const { filterByBoundary } = require('./filter-by-boundary');
 const PointsGenerator = require('./city-generator/points-generator');
 const { getTurf } = require('./city-generator/turf-loader');
-const { timingPolicy, updateEwma } = require('./scheduler/adaptive-timing');
 
 // Stage-2 defaults, same as poi-search.sh
 const DEFAULTS = {
@@ -59,10 +58,51 @@ const DEFAULTS = {
   subdivideThreshold: 18,
   requestDelayMs: 150,
   saveInterval: 20,
-  maxBrowserRestarts: 20,
+  maxBrowserRestarts: 4,
 };
 
 const COMPLETE_MARKER = '_area_complete.json';
+
+function areaOutputDir(area) {
+  return path.join(ROOT, 'output', area.relDir || area.dirSlug);
+}
+
+function writeJSONAtomic(file, value) {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+function writeAreaLive(area, phase, extra = {}) {
+  const outDir = areaOutputDir(area);
+  fs.mkdirSync(outDir, { recursive: true });
+  writeJSONAtomic(path.join(outDir, 'poi_search.live.json'), {
+    version: 1,
+    pipeline: 'poi-search',
+    city: area.dirSlug,
+    phase,
+    updatedAt: new Date().toISOString(),
+    ...extra,
+  });
+}
+
+function validateCategoryCoverage(result, categories) {
+  const done = new Set((result && result.results || []).map((entry) => entry.category));
+  const missing = categories.filter((category) => !done.has(category));
+  if (missing.length || done.size !== categories.length) {
+    throw new Error(`Incomplete category coverage: ${done.size}/${categories.length}; missing=${missing.slice(0, 5).join(',')}`);
+  }
+}
+
+function readValidMarker(area, categories, selfAdapt) {
+  const outDir = areaOutputDir(area);
+  const marker = JSON.parse(fs.readFileSync(path.join(outDir, COMPLETE_MARKER), 'utf8'));
+  if (!selfAdapt) {
+    validateCategoryCoverage(JSON.parse(fs.readFileSync(path.join(outDir, 'poi_search.json'), 'utf8')), categories);
+    if (fs.statSync(path.join(outDir, 'places.ndjson')).size === 0) throw new Error('places.ndjson is empty');
+  }
+  return marker;
+}
 
 // ============================================
 // GeoJSON split
@@ -151,6 +191,22 @@ async function prepareAreaStage1(area, opts) {
   const boundaryPath = path.join(dataDir, `${area.dirSlug}_boundary.geojson`);
   const pointsPath = path.join(dataDir, `${area.dirSlug}_points.json`);
 
+  // A resume with unchanged geometry settings should not rebuild stage 1 or
+  // reload Turf from a shared filesystem. The embedded metadata makes this
+  // reuse stricter than the old points-only shortcut.
+  if (!opts.fresh && fs.existsSync(boundaryPath) && fs.existsSync(pointsPath)) {
+    const existingBoundary = JSON.parse(fs.readFileSync(boundaryPath, 'utf8'));
+    const existingPoints = JSON.parse(fs.readFileSync(pointsPath, 'utf8'));
+    const properties = existingBoundary.features && existingBoundary.features[0]
+      && existingBoundary.features[0].properties || {};
+    if (Array.isArray(existingPoints)
+      && properties.multi_boundary_batch === opts.batchName
+      && Number(properties.buffer_meters || 0) === Number(opts.bufferMeters || 0)) {
+      console.log(`  stage 1: reusing ${existingPoints.length} existing points (${path.relative(ROOT, pointsPath)})`);
+      return { boundaryPath, pointsPath, numPoints: existingPoints.length, reused: true };
+    }
+  }
+
   // Optionally expand the raw boundary outward by opts.bufferMeters so the
   // per-area search + post-filter capture POIs just outside the park (entrances,
   // adjacent F&B, car parks). turf.buffer handles Polygon and MultiPolygon.
@@ -180,12 +236,6 @@ async function prepareAreaStage1(area, opts) {
     }],
   };
   fs.writeFileSync(boundaryPath, JSON.stringify(boundaryGeojson, null, 2));
-
-  if (fs.existsSync(pointsPath) && !opts.fresh) {
-    const existing = JSON.parse(fs.readFileSync(pointsPath, 'utf8'));
-    console.log(`  stage 1: reusing ${existing.length} existing points (${path.relative(ROOT, pointsPath)})`);
-    return { boundaryPath, pointsPath, numPoints: existing.length, reused: true };
-  }
 
   const generator = new PointsGenerator(boundaryGeojson, {
     cellSize: opts.cellSize,
@@ -230,7 +280,7 @@ async function prepareAreaStage1(area, opts) {
 // ============================================
 
 async function scrapeArea(area, stage1, categories, opts) {
-  const outDir = path.join(ROOT, 'output', area.relDir || area.dirSlug);
+  const outDir = areaOutputDir(area);
   fs.mkdirSync(outDir, { recursive: true });
 
   const incrementalSaveFile = path.join(outDir, 'poi_search.json');
@@ -238,6 +288,8 @@ async function scrapeArea(area, stage1, categories, opts) {
 
   if (opts.fresh) {
     try { fs.unlinkSync(incrementalSaveFile); } catch (_) {}
+    try { fs.unlinkSync(placesFile); } catch (_) {}
+    try { fs.unlinkSync(incrementalSaveFile.replace(/\.json$/, '.live.json')); } catch (_) {}
     try { fs.unlinkSync(path.join(outDir, COMPLETE_MARKER)); } catch (_) {}
   }
 
@@ -245,31 +297,17 @@ async function scrapeArea(area, stage1, categories, opts) {
   const { chromium } = require('playwright');
   const points = api.loadPointsFromJSON(stage1.pointsPath);
 
-  // Browser-relaunch retry loop, same rationale as poi-search.sh: chromium
-  // occasionally dies during long scrapes; batchSearchPOIs resumes from
-  // poi_search.json + places.ndjson after a relaunch.
-  const launchBrowser = async () => {
-    const policy = timingPolicy('browser_launch', opts.browserLaunchMeanMs);
-    const started = Date.now();
-    const instance = await chromium.launch({
-      headless: true,
-      timeout: policy.requestTimeoutMs,
-      args: ['--disk-cache-size=1'],
-    });
-    opts.browserLaunchMeanMs = updateEwma(
-      opts.browserLaunchMeanMs,
-      opts.browserLaunchSamples,
-      Date.now() - started,
-    );
-    opts.browserLaunchSamples++;
-    return instance;
-  };
-  let browser = await launchBrowser();
   let result = null;
-  try {
-    for (let attempt = 1; attempt <= opts.maxBrowserRestarts; attempt++) {
-      try {
-        result = await api.batchSearchPOIs(browser, points, categories, {
+  for (let attempt = 1; attempt <= opts.maxBrowserRestarts; attempt++) {
+    let browser;
+    try {
+      writeAreaLive(area, 'browser-start', { attempt, maxAttempts: opts.maxBrowserRestarts });
+      browser = await chromium.launch({
+        headless: true,
+        timeout: 60000,
+        args: ['--disk-cache-size=1'],
+      });
+      result = await api.batchSearchPOIs(browser, points, categories, {
           maxDepth: opts.maxDepth,
           subdivideThreshold: opts.subdivideThreshold,
           requestDelayMs: opts.requestDelayMs,
@@ -285,22 +323,23 @@ async function scrapeArea(area, stage1, categories, opts) {
           saStopAfterDry: opts.saStopAfterDry,
           saMinYield: opts.saMinYield,
           saSeeds: opts.saSeeds,
-        });
-        break;
-      } catch (e) {
-        const msg = String(e && e.message || '');
-        const isClosed = /Target page, context or browser has been closed|Browser has been closed|page has been closed|Execution context was destroyed/i.test(msg);
+      });
+      break;
+    } catch (error) {
+      const message = String(error && error.message || error);
+      const recoverable = error && ['MAP_FETCH_FAILED', 'PB_CAPTURE_FAILED', 'OPERATION_TIMEOUT'].includes(error.code)
+        || /Target page|browser has been closed|page has been closed|Execution context was destroyed|browserType\.launch|net::ERR_|Timeout/i.test(message);
+      if (!recoverable || attempt >= opts.maxBrowserRestarts) throw error;
+      console.warn(`  transient browser failure; retry ${attempt}/${opts.maxBrowserRestarts}: ${message.substring(0, 160)}`);
+      await new Promise((resolve) => setTimeout(resolve, Math.min(15000, attempt * 5000)));
+    } finally {
+      if (browser) {
         try { await browser.close(); } catch (_) {}
-        if (!isClosed || attempt >= opts.maxBrowserRestarts) throw e;
-        console.warn(`  browser died, restarting (attempt ${attempt}/${opts.maxBrowserRestarts}): ${msg.substring(0, 120)}`);
-        const retry = timingPolicy('browser_launch', opts.browserLaunchMeanMs, { attempt });
-        await new Promise((r) => setTimeout(r, retry.retryDelayMs));
-        browser = await launchBrowser();
       }
     }
-  } finally {
-    try { await browser.close(); } catch (_) {}
   }
+
+  if (!opts.selfAdapt) validateCategoryCoverage(result, categories);
 
   let filterStats = null;
   if (fs.existsSync(placesFile)) {
@@ -316,7 +355,7 @@ async function scrapeArea(area, stage1, categories, opts) {
     totalPlaceIds: result ? result.totalPlaceIds : 0,
     filter: filterStats,
   };
-  fs.writeFileSync(path.join(outDir, COMPLETE_MARKER), JSON.stringify(marker, null, 2));
+  writeJSONAtomic(path.join(outDir, COMPLETE_MARKER), marker);
   return marker;
 }
 
@@ -384,17 +423,22 @@ async function main(opts) {
   for (const area of selected) {
     n++;
     const label = `[MULTI] [${n}/${selected.length}] ${area.slug}`;
-    const markerPath = path.join(ROOT, 'output', area.dirSlug, COMPLETE_MARKER);
+    const markerPath = path.join(areaOutputDir(area), COMPLETE_MARKER);
 
     if (fs.existsSync(markerPath) && !opts.fresh) {
-      const prev = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
-      console.log(`\n${label}: already complete (${prev.completedAt}, ${prev.totalPlaceIds} POIs) — skipping`);
-      summary.push({ area: area.slug, status: 'skipped', pois: prev.totalPlaceIds });
-      continue;
+      try {
+        const prev = readValidMarker(area, categories, opts.selfAdapt);
+        console.log(`\n${label}: already complete (${prev.completedAt}, ${prev.totalPlaceIds} POIs) — skipping`);
+        summary.push({ area: area.slug, status: 'skipped', pois: prev.totalPlaceIds });
+        continue;
+      } catch (error) {
+        console.warn(`\n${label}: ignoring invalid completion marker: ${error.message}`);
+      }
     }
 
     console.log(`\n${label}: starting`);
     try {
+      writeAreaLive(area, 'area-prepare');
       const stage1 = await prepareAreaStage1(area, opts);
       const marker = await scrapeArea(area, stage1, categories, opts);
       const kept = marker.filter ? marker.filter.kept : marker.totalPlaceIds;
@@ -402,6 +446,7 @@ async function main(opts) {
       summary.push({ area: area.slug, status: 'done', pois: kept });
     } catch (e) {
       // One area failing must not block the rest; it retries on the next run.
+      try { writeAreaLive(area, 'error', { error: String(e && e.message || e) }); } catch (_) {}
       console.error(`${label}: FAILED — ${e && e.message || e}`);
       summary.push({ area: area.slug, status: 'failed', error: String(e && e.message || e) });
     }
@@ -441,8 +486,6 @@ function parseArgs(argv) {
     requestDelayMs: DEFAULTS.requestDelayMs,
     saveInterval: DEFAULTS.saveInterval,
     maxBrowserRestarts: DEFAULTS.maxBrowserRestarts,
-    browserLaunchMeanMs: 8000,
-    browserLaunchSamples: 0,
     bufferMeters: 0,
     dryRun: false,
     fresh: false,
@@ -470,7 +513,6 @@ function parseArgs(argv) {
       case '--threshold': opts.subdivideThreshold = parseInt(argv[++i], 10); break;
       case '--delay': opts.requestDelayMs = parseInt(argv[++i], 10); break;
       case '--save-interval': opts.saveInterval = parseInt(argv[++i], 10); break;
-      case '--browser-launch-mean-ms': opts.browserLaunchMeanMs = parseInt(argv[++i], 10); break;
       case '--buffer': opts.bufferMeters = parseFloat(argv[++i]); break;
       case '--dry-run': opts.dryRun = true; break;
       case '--fresh': opts.fresh = true; break;
@@ -524,7 +566,6 @@ Options:
   --threshold <n>          Subdivide threshold (default: 18)
   --delay <ms>             Request delay (default: 150)
   --save-interval <n>      Save progress every N requests (default: 20)
-  --browser-launch-mean-ms Bootstrap launch EWMA in ms (default: 8000)
   --dry-run                Split + generate points only, no scraping
   --fresh                  Re-run areas even if marked complete
   --help                   Show this message
@@ -555,4 +596,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { splitAreas, prepareAreaStage1, sanitizeName };
+module.exports = {
+  splitAreas,
+  prepareAreaStage1,
+  sanitizeName,
+  areaOutputDir,
+  validateCategoryCoverage,
+  readValidMarker,
+};
