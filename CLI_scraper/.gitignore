@@ -45,3 +45,6 @@ Thumbs.db
 
 # Bootstrap marker (always regenerated)
 node_modules/.bootstrap-ok
+
+# Generated field-map images, plots, CSV/PDF/HTML report exports
+docs/assets/

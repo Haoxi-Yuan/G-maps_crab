@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-08-24T11:38:49.665Z",
+  "list": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_full_20260824/list/reviewers.all.ndjson",
+  "options": {
+    "mode": "staircase",
+    "concurrencySequence": [
+      9
+    ],
+    "profilesPerStage": 100,
+    "adaptiveEpochs": 6,
+    "adaptiveStart": 1,
+    "adaptiveMax": 8,
+    "requestIntervalMs": 150,
+    "initialWaitMs": 2500,
+    "maxProfileReviews": 200,
+    "fetchRetries": 2,
+    "cooldownMs": 0,
+    "browserCount": 2,
+    "list": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_full_20260824/list/reviewers.all.ndjson",
+    "output": "/data/haoxi/CLI_scraper/experiments/reviewer_parallel_benchmark_20260824/multichrome-r1-b2-c9.json"
+  },
+  "stages": [
+    {
+      "stage": 1,
+      "concurrency": 9,
+      "browser_count": 2,
+      "active_browser_count": 2,
+      "lanes_per_browser": [
+        5,
+        4
+      ],
+      "sample_size": 100,
+      "wall_ms": 68181,
+      "profiles_per_minute": 88.001,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 4763,
+      "duration_p95_ms": 9843,
+      "duration_max_ms": 12489,
+      "returned_reviews": 6425,
+      "statuses": {
+        "complete": 67,
+        "service_cap": 19,
+        "private_or_hidden": 14
+      },
+      "errors": []
+    }
+  ]
+}

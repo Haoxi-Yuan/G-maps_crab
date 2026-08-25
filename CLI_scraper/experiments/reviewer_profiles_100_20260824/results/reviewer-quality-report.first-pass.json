@@ -1,0 +1,373 @@
+{
+  "generated_at": "2026-08-24T08:31:37.538Z",
+  "input_file": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_100_20260824/run/reviewers.ndjson",
+  "summary": {
+    "records": 100,
+    "attempt_records": 100,
+    "attempt_error_records": 1,
+    "retried_records": 0,
+    "valid_profiles": 99,
+    "profile_success_rate": 0.99,
+    "error_records": 1,
+    "error_rate": 0.01,
+    "returned_reviews": 18200,
+    "visible_reviews_reported": 390753,
+    "returned_to_visible_ratio": 0.0466,
+    "statuses": {
+      "service_cap": 99,
+      "error": 1
+    },
+    "stop_reasons": {
+      "service_cap": 99,
+      "fetch_error": 1
+    }
+  },
+  "performance": {
+    "elapsed_seconds": 786,
+    "profiles_per_minute": 7.634,
+    "seconds_per_profile": 7.86
+  },
+  "core_review_success": {
+    "review_id": {
+      "present": 18200,
+      "total": 18200,
+      "rate": 1
+    },
+    "rating": {
+      "present": 18200,
+      "total": 18200,
+      "rate": 1
+    },
+    "business_name": {
+      "present": 17885,
+      "total": 18200,
+      "rate": 0.9827
+    },
+    "coordinates": {
+      "present": 17885,
+      "total": 18200,
+      "rate": 0.9827
+    }
+  },
+  "field_coverage": {
+    "record": {
+      "extracted_at": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      },
+      "reviewer_id": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      },
+      "reviewer": {
+        "present": 99,
+        "total": 100,
+        "rate": 0.99
+      },
+      "public_content": {
+        "present": 99,
+        "total": 100,
+        "rate": 0.99
+      },
+      "completeness": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      },
+      "source_summary": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      },
+      "_status": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      },
+      "_source": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      },
+      "_error": {
+        "present": 1,
+        "total": 100,
+        "rate": 0.01
+      },
+      "_meta": {
+        "present": 100,
+        "total": 100,
+        "rate": 1
+      }
+    },
+    "reviewer": {
+      "reviewer_id": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "reviewer_name": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "reviewer_profile_url": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "reviewer_avatar_url": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "reviewer_bio": {
+        "present": 70,
+        "total": 99,
+        "rate": 0.7071
+      },
+      "is_local_guide": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "total_contribution_actions": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "contribution_summary_text": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "local_guide": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      },
+      "contributions": {
+        "present": 99,
+        "total": 99,
+        "rate": 1
+      }
+    },
+    "review": {
+      "review_id": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "rating": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "review_text": {
+        "present": 17832,
+        "total": 18200,
+        "rate": 0.9798
+      },
+      "review_text_translated": {
+        "present": 11892,
+        "total": 18200,
+        "rate": 0.6534
+      },
+      "language": {
+        "present": 17833,
+        "total": 18200,
+        "rate": 0.9798
+      },
+      "translated_language": {
+        "present": 11895,
+        "total": 18200,
+        "rate": 0.6536
+      },
+      "published_at": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "published_at_date": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "edited_at_date": {
+        "present": 4078,
+        "total": 18200,
+        "rate": 0.2241
+      },
+      "review_likes_count": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "reviewer": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "review_details": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "structured_responses": {
+        "present": 8374,
+        "total": 18200,
+        "rate": 0.4601
+      },
+      "review_images": {
+        "present": 11114,
+        "total": 18200,
+        "rate": 0.6107
+      },
+      "owner_response": {
+        "present": 2072,
+        "total": 18200,
+        "rate": 0.1138
+      },
+      "business": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      }
+    },
+    "review_details": {
+      "order_type": {
+        "present": 2185,
+        "total": 18200,
+        "rate": 0.1201
+      },
+      "price_per_person": {
+        "present": 3765,
+        "total": 18200,
+        "rate": 0.2069
+      },
+      "meal_type": {
+        "present": 3300,
+        "total": 18200,
+        "rate": 0.1813
+      },
+      "group_size": {
+        "present": 1460,
+        "total": 18200,
+        "rate": 0.0802
+      },
+      "wait_time": {
+        "present": 1672,
+        "total": 18200,
+        "rate": 0.0919
+      },
+      "food_score": {
+        "present": 4895,
+        "total": 18200,
+        "rate": 0.269
+      },
+      "service_score": {
+        "present": 4808,
+        "total": 18200,
+        "rate": 0.2642
+      },
+      "atmosphere_score": {
+        "present": 4782,
+        "total": 18200,
+        "rate": 0.2627
+      },
+      "recommended_dishes": {
+        "present": 222,
+        "total": 18200,
+        "rate": 0.0122
+      }
+    },
+    "business": {
+      "name": {
+        "present": 17885,
+        "total": 18200,
+        "rate": 0.9827
+      },
+      "full_address": {
+        "present": 17827,
+        "total": 18200,
+        "rate": 0.9795
+      },
+      "coordinates": {
+        "present": 18200,
+        "total": 18200,
+        "rate": 1
+      },
+      "categories": {
+        "present": 17827,
+        "total": 18200,
+        "rate": 0.9795
+      },
+      "category_ids": {
+        "present": 17827,
+        "total": 18200,
+        "rate": 0.9795
+      },
+      "main_category": {
+        "present": 17827,
+        "total": 18200,
+        "rate": 0.9795
+      },
+      "price_range": {
+        "present": 6445,
+        "total": 18200,
+        "rate": 0.3541
+      },
+      "place_id": {
+        "present": 17885,
+        "total": 18200,
+        "rate": 0.9827
+      },
+      "google_id": {
+        "present": 17885,
+        "total": 18200,
+        "rate": 0.9827
+      },
+      "chij_id": {
+        "present": 17885,
+        "total": 18200,
+        "rate": 0.9827
+      },
+      "timezone": {
+        "present": 17885,
+        "total": 18200,
+        "rate": 0.9827
+      },
+      "locality": {
+        "present": 17018,
+        "total": 18200,
+        "rate": 0.9351
+      },
+      "country": {
+        "present": 17877,
+        "total": 18200,
+        "rate": 0.9823
+      },
+      "country_code": {
+        "present": 17877,
+        "total": 18200,
+        "rate": 0.9823
+      },
+      "neighborhood": {
+        "present": 9236,
+        "total": 18200,
+        "rate": 0.5075
+      },
+      "google_maps_url": {
+        "present": 17885,
+        "total": 18200,
+        "rate": 0.9827
+      }
+    }
+  },
+  "notes": [
+    "Field coverage is observed non-null coverage, not a failure rate; translations, owner responses, media, biography and dining details are optional.",
+    "A profile is historically complete only when completeness.stop_reason is complete; service_cap and hidden histories are intentionally incomplete."
+  ]
+}

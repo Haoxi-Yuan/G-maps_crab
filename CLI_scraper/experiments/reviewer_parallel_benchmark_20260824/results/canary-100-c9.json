@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-08-24T11:26:02.200Z",
+  "list": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_full_20260824/list/reviewers.all.ndjson",
+  "options": {
+    "mode": "staircase",
+    "concurrencySequence": [
+      9
+    ],
+    "profilesPerStage": 100,
+    "adaptiveEpochs": 6,
+    "adaptiveStart": 1,
+    "adaptiveMax": 8,
+    "requestIntervalMs": 150,
+    "initialWaitMs": 2500,
+    "maxProfileReviews": 200,
+    "fetchRetries": 2,
+    "cooldownMs": 0,
+    "list": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_full_20260824/list/reviewers.all.ndjson",
+    "output": "/data/haoxi/CLI_scraper/experiments/reviewer_parallel_benchmark_20260824/canary-100-c9.json"
+  },
+  "stages": [
+    {
+      "stage": 1,
+      "concurrency": 9,
+      "sample_size": 100,
+      "wall_ms": 90164,
+      "profiles_per_minute": 66.545,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 5403,
+      "duration_p95_ms": 11370,
+      "duration_max_ms": 65705,
+      "returned_reviews": 6411,
+      "statuses": {
+        "complete": 67,
+        "service_cap": 19,
+        "private_or_hidden": 14
+      },
+      "errors": []
+    }
+  ]
+}

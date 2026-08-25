@@ -1,0 +1,23 @@
+	Command being timed: "/data/haoxi/CLI_scraper/.runtime/node-v22.14.0-linux-x64/bin/node src/cli/run-reviewers.js --input /data/haoxi/CLI_scraper/output/singapore/2026-08-14/singapore_reviews_20260814.db --output /data/haoxi/CLI_scraper/experiments/reviewer_profiles_100_20260824/run/reviewers.ndjson --list-output /data/haoxi/CLI_scraper/experiments/reviewer_profiles_100_20260824/run/reviewers.list.ndjson --list-limit 100 --list-order review-count-desc --max-reviewers 100 --max-profile-reviews 200 --delay-ms 500 --live-status /data/haoxi/CLI_scraper/experiments/reviewer_profiles_100_20260824/run/reviewers.live.json"
+	User time (seconds): 130.08
+	System time (seconds): 45.23
+	Percent of CPU this job got: 22%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 13:13.40
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 342116
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 44383
+	Minor (reclaiming a frame) page faults: 2630375
+	Voluntary context switches: 3548849
+	Involuntary context switches: 52986
+	Swaps: 0
+	File system inputs: 21464
+	File system outputs: 3581832
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

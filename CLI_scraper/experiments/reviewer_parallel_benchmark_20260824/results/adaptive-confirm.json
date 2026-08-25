@@ -1,0 +1,146 @@
+{
+  "generated_at": "2026-08-24T11:20:17.926Z",
+  "list": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_full_20260824/list/reviewers.all.ndjson",
+  "options": {
+    "mode": "adaptive",
+    "concurrencySequence": [
+      1,
+      2,
+      4,
+      6
+    ],
+    "profilesPerStage": 36,
+    "adaptiveEpochs": 5,
+    "adaptiveStart": 6,
+    "adaptiveMax": 10,
+    "requestIntervalMs": 150,
+    "initialWaitMs": 2500,
+    "maxProfileReviews": 200,
+    "fetchRetries": 2,
+    "cooldownMs": 5000,
+    "list": "/data/haoxi/CLI_scraper/experiments/reviewer_profiles_full_20260824/list/reviewers.all.ndjson",
+    "output": "/data/haoxi/CLI_scraper/experiments/reviewer_parallel_benchmark_20260824/adaptive-confirm.json"
+  },
+  "stages": [
+    {
+      "epoch": 1,
+      "concurrency": 6,
+      "sample_size": 36,
+      "wall_ms": 66938,
+      "profiles_per_minute": 32.269,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 4706,
+      "duration_p95_ms": 7160,
+      "returned_reviews": 2431,
+      "statuses": {
+        "complete": 26,
+        "service_cap": 6,
+        "private_or_hidden": 4
+      },
+      "errors": [],
+      "decision": {
+        "concurrency": 7,
+        "action": "increase",
+        "reason": "healthy_headroom"
+      }
+    },
+    {
+      "epoch": 2,
+      "concurrency": 7,
+      "sample_size": 36,
+      "wall_ms": 32167,
+      "profiles_per_minute": 67.15,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 5154,
+      "duration_p95_ms": 8330,
+      "returned_reviews": 2431,
+      "statuses": {
+        "complete": 26,
+        "service_cap": 6,
+        "private_or_hidden": 4
+      },
+      "errors": [],
+      "decision": {
+        "concurrency": 8,
+        "action": "increase",
+        "reason": "healthy_headroom"
+      }
+    },
+    {
+      "epoch": 3,
+      "concurrency": 8,
+      "sample_size": 36,
+      "wall_ms": 31231,
+      "profiles_per_minute": 69.162,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 5687,
+      "duration_p95_ms": 8892,
+      "returned_reviews": 2431,
+      "statuses": {
+        "service_cap": 6,
+        "complete": 26,
+        "private_or_hidden": 4
+      },
+      "errors": [],
+      "decision": {
+        "concurrency": 9,
+        "action": "increase",
+        "reason": "healthy_headroom"
+      }
+    },
+    {
+      "epoch": 4,
+      "concurrency": 9,
+      "sample_size": 36,
+      "wall_ms": 24623,
+      "profiles_per_minute": 87.723,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 4959,
+      "duration_p95_ms": 8681,
+      "returned_reviews": 2431,
+      "statuses": {
+        "complete": 26,
+        "private_or_hidden": 4,
+        "service_cap": 6
+      },
+      "errors": [],
+      "decision": {
+        "concurrency": 10,
+        "action": "increase",
+        "reason": "healthy_headroom"
+      }
+    },
+    {
+      "epoch": 5,
+      "concurrency": 10,
+      "sample_size": 36,
+      "wall_ms": 26961,
+      "profiles_per_minute": 80.116,
+      "success_rate": 1,
+      "error_rate": 0,
+      "throttle_rate": 0,
+      "duration_p50_ms": 6571,
+      "duration_p95_ms": 9997,
+      "returned_reviews": 2431,
+      "statuses": {
+        "private_or_hidden": 4,
+        "service_cap": 6,
+        "complete": 26
+      },
+      "errors": [],
+      "decision": {
+        "concurrency": 10,
+        "action": "hold",
+        "reason": "maximum_concurrency"
+      }
+    }
+  ]
+}

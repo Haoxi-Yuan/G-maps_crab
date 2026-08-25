@@ -1,13 +1,14 @@
 # G-Maps Crab CLI
 
-G-Maps Crab is a five-stage, resumable Google Maps collection pipeline:
+G-Maps Crab is a six-stage, resumable Google Maps collection pipeline:
 
 ```text
 1. Boundary and sampling points
 2. POI search (single area or multi-boundary batch)
 3. Review collection
-4. NDJSON to SQLite
-5. Selected image download
+4. Reviewer-profile collection
+5. NDJSON to SQLite
+6. Selected image download
 ```
 
 The maintained runtime supports macOS, Ubuntu/mainstream Linux, and native
@@ -124,7 +125,75 @@ An optional `--min-count` creates a derived filtered input beside the source.
 
 The legacy Unix wizard remains available as `./review-scrape.sh`.
 
-## Stage 4 — SQLite
+To continue automatically into reviewer profiles after the place-review run:
+
+```bash
+node bin/gmaps-crab.js reviews --city singapore --reviewers
+```
+
+## Stage 4 — reviewer profiles
+
+```bash
+node bin/gmaps-crab.js reviewers --city singapore
+node bin/gmaps-crab.js reviewers \
+  --input output/custom/reviews.ndjson \
+  --max-profile-reviews 200
+node bin/gmaps-crab.js reviewers \
+  --input output/custom/reviews.db \
+  --list-limit 100 --list-order review-count-desc
+node bin/gmaps-crab.js reviewers --help
+```
+
+For an existing stable-shard run, resume all shard lists through one Chromium
+and one global IP gate while preserving the original append-only outputs:
+
+```bash
+node bin/gmaps-crab.js reviewers-parallel \
+  --run-root experiments/reviewer_profiles_full_20260824 \
+  --input output/singapore/reviews.db \
+  --concurrency 27 \
+  --request-interval-ms 150
+```
+
+The runner streams the lists rather than loading millions of reviewers into
+memory, scans every shard output for non-error completion markers, writes each
+new profile back to its stable shard, drains in-flight work on SIGINT/SIGTERM,
+rotates Chromium between drained windows, and backs off after unsafe windows.
+
+The command streams `reviews.ndjson`, deduplicates Google reviewer IDs into
+`reviewers.list.ndjson`, and appends one resumable record per profile to
+`reviewers.ndjson`. Each public review contains the review text and translation,
+rating, time, owner response, media, business identity/address/categories and
+coordinates. Google structured answers are retained verbatim and normalized as
+`order_type`, `price_per_person`, `meal_type`, `group_size`, `wait_time`,
+food/service/atmosphere scores, and `recommended_dishes` when present.
+
+Google currently returns at most 200 public reviews per profile, and very
+media-heavy profiles can have a lower effective response limit. The scraper
+automatically falls back through smaller request sizes and records every attempt.
+It only marks a profile complete when the returned count covers the public count.
+Hidden/private histories and capped results are explicit in
+`completeness.stop_reason`; they are never reported as fully collected. See
+[`docs/REVIEWER_PROFILES.md`](docs/REVIEWER_PROFILES.md) for the field contract,
+count semantics, resume behavior, and verified limitations.
+
+Use `reviewer-benchmark` to measure the safe concurrency envelope of one public
+IP with one or more Chromium processes, a single shared IP request gate, and
+adaptive feedback. Read
+[`docs/REVIEWER_PARALLELISM.md`](docs/REVIEWER_PARALLELISM.md) before changing a
+production run.
+
+```bash
+node bin/gmaps-crab.js reviewer-benchmark --help
+```
+
+The validated chark long-queue topology is one Chromium with a shared global
+queue and 27 in-flight reviewer contexts. `--browser-count` is available for
+controlled topology A/B tests; multiple Chromium processes do not create an
+independent IP request budget. The benchmark checkpoints every completed stage
+and can stop on per-reviewer content drift with `--stop-on-unsafe`.
+
+## Stage 5 — SQLite
 
 Interactive portable wizard:
 
@@ -153,7 +222,7 @@ The schema uses explicit UPSERTs, records source provenance, preserves local
 enrichment fields when incoming values are null, and validates the independent
 NDJSON-to-SQLite contract.
 
-## Stage 5 — images
+## Stage 6 — images
 
 The cross-platform image command reads a review SQLite database and streams a
 bounded selection; it does not load the whole database into memory.
@@ -201,8 +270,10 @@ npm test
 
 Tests cover syntax, the independent NDJSON key contract, SQL mapping, database
 UPSERT/provenance behavior, image-download planning, URL refresh/cache behavior,
-and POI resume/failure boundaries. CI runs these checks on Ubuntu, macOS, and
-Windows without calling live Google endpoints.
+POI resume/failure boundaries, reviewer-profile wire variants, structured dining
+answers, coordinates, reviewer deduplication, and legacy multiline NDJSON
+recovery. CI runs these checks on Ubuntu, macOS, and Windows without calling live
+Google endpoints.
 
 ## Reproducible runs
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Top-level interactive launcher.
-# Routes to: boundary wizard (stage 1) / POI search (stage 2) / review scrape (stage 3).
+# Routes to every supported collection and export stage.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,14 +59,15 @@ show_status() {
   [ $found_data -eq 0 ] && echo "  (none)"
 
   echo ""
-  echo "Cities in output/ (stages 2+3):"
+  echo "Cities in output/ (stages 2+):"
   local found_out=0
   for d in output/*/; do
     [ -d "$d" ] || continue
     local city=$(basename "$d")
     local places="-"; [ -f "$d/places.ndjson" ] && places=$(wc -l < "$d/places.ndjson" | tr -d ' ')
     local reviews="-"; [ -f "$d/reviews.ndjson" ] && reviews=$(wc -l < "$d/reviews.ndjson" | tr -d ' ')
-    printf "  %-25s places=%s reviews=%s\n" "$city" "$places" "$reviews"
+    local reviewers="-"; [ -f "$d/reviewers.ndjson" ] && reviewers=$(wc -l < "$d/reviewers.ndjson" | tr -d ' ')
+    printf "  %-25s places=%s reviews=%s reviewers=%s\n" "$city" "$places" "$reviews" "$reviewers"
     found_out=1
   done
   [ $found_out -eq 0 ] && echo "  (none)"
@@ -75,16 +76,40 @@ show_status() {
   echo "Running background processes:"
   local pids_poi=$(pgrep -f "poi-searcher-api" 2>/dev/null || true)
   local pids_rev=$(pgrep -f "review-scraper"   2>/dev/null || true)
-  if [ -z "$pids_poi" ] && [ -z "$pids_rev" ]; then
+  local pids_reviewer=$(pgrep -f "reviewer-profile-scraper" 2>/dev/null || true)
+  if [ -z "$pids_poi" ] && [ -z "$pids_rev" ] && [ -z "$pids_reviewer" ]; then
     echo "  (none)"
   else
-    for pid in $pids_poi $pids_rev; do
+    for pid in $pids_poi $pids_rev $pids_reviewer; do
       local elapsed=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ')
       local cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 80)
       printf "  PID %-8s elapsed=%-10s %s\n" "$pid" "$elapsed" "$cmd"
     done
   fi
   echo ""
+}
+
+run_reviewer_profiles() {
+  echo ""
+  read -p "Output city/run slug (output/<slug>/reviews.ndjson)> " REVIEWER_CITY
+  [ -n "$REVIEWER_CITY" ] || return
+  node bin/gmaps-crab.js reviewers --city "$REVIEWER_CITY"
+}
+
+run_reviewer_benchmark() {
+  echo ""
+  echo "Use the JS CLI so the IP budget and output paths are explicit:"
+  echo "  node bin/gmaps-crab.js reviewer-benchmark --help"
+  echo ""
+  read -p "Press Enter to continue..." _
+}
+
+run_reviewer_parallel() {
+  echo ""
+  echo "Use the JS CLI with an existing stable-shard run root:"
+  echo "  node bin/gmaps-crab.js reviewers-parallel --help"
+  echo ""
+  read -p "Press Enter to continue..." _
 }
 
 main_menu() {
@@ -94,8 +119,11 @@ main_menu() {
     echo "  [2] Stage 2 — POI search (single city)"
     echo "  [2b] Stage 2 — Multi-boundary batch (many areas, e.g. parks)"
     echo "  [3] Stage 3 — Review scrape"
-    echo "  [4] Stage 4 — Build SQLite DB from ndjson sources"
-    echo "  [5] Stage 5 — Image downloader (independent of stage 3)"
+    echo "  [4] Stage 4 — Reviewer profiles from reviews.ndjson"
+    echo "  [4p] Stage 4 — Global parallel reviewer resume"
+    echo "  [4b] Stage 4 — Adaptive reviewer concurrency benchmark"
+    echo "  [5] Stage 5 — Build SQLite DB from ndjson sources"
+    echo "  [6] Stage 6 — Image downloader (independent of stage 3)"
     echo ""
     echo "  [s] Show status across all cities"
     echo "  [q] Quit"
@@ -106,8 +134,11 @@ main_menu() {
       2) ./poi-search.sh ;;
       2b|2B) ./multi-boundary.sh ;;
       3) ./review-scrape.sh ;;
-      4) node src/cli/db-wizard.js ;;
-      5) node src/cli/image-wizard.js ;;
+      4) run_reviewer_profiles ;;
+      4p|4P) run_reviewer_parallel ;;
+      4b|4B) run_reviewer_benchmark ;;
+      5) node src/cli/db-wizard.js ;;
+      6) node src/cli/image-wizard.js ;;
       s|S) show_status; read -p "Press Enter to continue..." _ ;;
       q|Q) exit 0 ;;
       *) echo "Invalid selection."; sleep 1 ;;

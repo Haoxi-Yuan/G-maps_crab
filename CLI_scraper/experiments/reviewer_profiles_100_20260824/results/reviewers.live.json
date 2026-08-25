@@ -1,0 +1,13 @@
+{
+  "phase": "complete",
+  "total": 1,
+  "processed": 1,
+  "errors": 0,
+  "updated_at": "2026-08-24T08:32:34.238Z",
+  "current_reviewer_id": null,
+  "current_reviewer_name": null,
+  "complete_profiles": 0,
+  "capped_profiles": 1,
+  "hidden_profiles": 0,
+  "elapsed_seconds": 7
+}

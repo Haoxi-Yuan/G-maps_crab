@@ -19,6 +19,9 @@ const commands = {
   poi: 'src/cli/run-poi.js',
   multi: 'src/multi-boundary-orchestrator.js',
   reviews: 'src/cli/run-reviews.js',
+  reviewers: 'src/cli/run-reviewers.js',
+  'reviewers-parallel': 'src/cli/run-reviewers-parallel.js',
+  'reviewer-benchmark': 'scripts/benchmark-reviewer-parallel.js',
   db: 'src/cli/db-wizard.js',
   images: 'scripts/download-db-images.js',
 };
@@ -35,6 +38,9 @@ Commands:
   poi          Run a single-city POI search
   multi        Run a multi-boundary POI batch
   reviews      Scrape reviews from places.ndjson
+  reviewers    Scrape reviewer profiles from reviews.ndjson
+  reviewers-parallel  Resume stable reviewer shards with one global browser queue
+  reviewer-benchmark  Measure adaptive reviewer concurrency for one IP
   db           Build or inspect a SQLite database
   images       Download selected images from a review SQLite database
   status       Summarize local data/output directories
@@ -44,6 +50,10 @@ Examples:
   node bin/gmaps-crab.js boundary
   node bin/gmaps-crab.js poi --city singapore
   node bin/gmaps-crab.js reviews --city singapore
+  node bin/gmaps-crab.js reviewers --city singapore
+  node bin/gmaps-crab.js reviewers-parallel --help
+  node bin/gmaps-crab.js reviewer-benchmark --help
+  node bin/gmaps-crab.js reviews --city singapore --reviewers
   node bin/gmaps-crab.js multi --boundaries areas.geojson --name parks
   node bin/gmaps-crab.js images --help
 
@@ -100,7 +110,8 @@ async function status() {
       if (!fs.statSync(directory).isDirectory() || name.startsWith('.')) continue;
       const places = await lineCount(path.join(directory, 'places.ndjson'));
       const reviews = await lineCount(path.join(directory, 'reviews.ndjson'));
-      if (places !== '-' || reviews !== '-') console.log(`output/${name}: places=${places} reviews=${reviews}`);
+      const reviewers = await lineCount(path.join(directory, 'reviewers.ndjson'));
+      if (places !== '-' || reviews !== '-' || reviewers !== '-') console.log(`output/${name}: places=${places} reviews=${reviews} reviewers=${reviewers}`);
     }
   }
   console.log('');
@@ -115,18 +126,21 @@ G-Maps Crab CLI ${packageJson.version}
   [2] Single-city POI search
   [3] Multi-boundary POI batch
   [4] Review scrape
-  [5] SQLite database
-  [6] Image downloader
+  [5] Reviewer profiles
+  [5p] Reviewer global parallel resume
+  [5b] Reviewer concurrency benchmark
+  [6] SQLite database
+  [7] Image downloader
   [s] Status
   [q] Quit
 `);
   const answer = await new Promise((resolve) => prompt.question('Select> ', resolve));
   prompt.close();
-  const selected = { '1': 'boundary', '2': 'poi', '3': 'multi', '4': 'reviews', '5': 'db', '6': 'images' }[answer.trim()];
+  const selected = { '1': 'boundary', '2': 'poi', '3': 'multi', '4': 'reviews', '5': 'reviewers', '5p': 'reviewers-parallel', '5b': 'reviewer-benchmark', '6': 'db', '7': 'images' }[answer.trim().toLowerCase()];
   if (answer.trim().toLowerCase() === 'q') return;
   if (answer.trim().toLowerCase() === 's') { await status(); return; }
   if (!selected) throw new Error('invalid selection');
-  if (selected === 'poi' || selected === 'multi' || selected === 'reviews' || selected === 'images') {
+  if (selected === 'poi' || selected === 'multi' || selected === 'reviews' || selected === 'reviewers' || selected === 'reviewers-parallel' || selected === 'reviewer-benchmark' || selected === 'images') {
     console.log(`Run \"node bin/gmaps-crab.js ${selected} --help\" to provide the required input.`);
     return;
   }
