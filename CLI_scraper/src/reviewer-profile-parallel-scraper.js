@@ -14,8 +14,10 @@ const {
 } = require('./reviewer-profile-parser');
 const {
   SERVICE_MAX_REVIEWS,
+  appendDoneId,
   completedReviewerIds,
   completenessFor,
+  doneSidecarPath,
   expansionPageSizes,
   fetchExpandedMas,
   fetchMasFromPage,
@@ -272,10 +274,10 @@ function reapOrphanChromium(scopeDir, keepPids = new Set(), log = () => {}) {
 }
 
 async function scrapeReviewerProfilesParallel(configuration, options = {}) {
-  const shards = configuration.shards.map((shard) => ({
-    listFile: path.resolve(shard.listFile),
-    outputFile: path.resolve(shard.outputFile),
-  }));
+  const shards = configuration.shards.map((shard) => {
+    const outputFile = path.resolve(shard.outputFile);
+    return { listFile: path.resolve(shard.listFile), outputFile, doneFile: doneSidecarPath(outputFile) };
+  });
   const totalReviewers = configuration.totalReviewers;
   const targetConcurrency = options.concurrency ?? 27;
   const requestIntervalMs = options.requestIntervalMs ?? 150;
@@ -315,8 +317,10 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
     fs.mkdirSync(path.dirname(shard.outputFile), { recursive: true });
   }
 
-  log(`[REVIEWERS PARALLEL] scanning ${shards.length} outputs for resumable completion markers`);
-  const doneByShard = await Promise.all(shards.map((shard) => completedReviewerIds(shard.outputFile)));
+  log(`[REVIEWERS PARALLEL] resolving resume state for ${shards.length} shards (done-index sidecar, or one-time full scan to bootstrap it)`);
+  const doneByShard = await Promise.all(shards.map((shard) => completedReviewerIds(shard.outputFile, {
+    doneFile: shard.doneFile, rebuild: options.rebuildDoneIndex === true, log,
+  })));
   const completedBeforeStart = doneByShard.reduce((sum, done) => sum + done.size, 0);
   const pendingAtStart = Math.max(0, totalReviewers - completedBeforeStart);
   const runLimit = Math.min(pendingAtStart, maxReviewers);
@@ -540,7 +544,12 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
   };
 
   const recordResult = (task, result) => {
-    fs.appendFileSync(shards[task.shardIndex].outputFile, `${JSON.stringify(result.record)}\n`);
+    const shard = shards[task.shardIndex];
+    fs.appendFileSync(shard.outputFile, `${JSON.stringify(result.record)}\n`);
+    // Maintain the compact done-index right after the record so resume never has
+    // to re-read the multi-GB output. Terminal records only; errors stay
+    // re-fetchable. Written after the output, so it can only lag, never lead.
+    if (result.record._status !== 'error') appendDoneId(shard.doneFile, result.record.reviewer_id);
     processed += 1;
     processedSinceRestart += 1;
     lastProgressAt = Date.now();

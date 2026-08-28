@@ -116,7 +116,13 @@ async function main() {
   const listFile = options.listOutput
     ? path.resolve(root, options.listOutput)
     : path.join(path.dirname(outputFile), 'reviewers.list.ndjson');
-  if (options.fresh && fs.existsSync(outputFile)) fs.unlinkSync(outputFile);
+  if (options.fresh) {
+    // Remove the output and its resume sidecar together so a stale index can
+    // never point at a freshly emptied output.
+    for (const file of [outputFile, `${outputFile}.done`]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+  }
 
   await scrapeReviewerProfiles(inputFile, outputFile, {
     listFile,

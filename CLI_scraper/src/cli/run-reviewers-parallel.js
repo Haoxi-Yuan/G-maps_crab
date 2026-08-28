@@ -28,6 +28,8 @@ Options:
   --max-profile-reviews <n>    1-${SERVICE_MAX_REVIEWS} (default: ${SERVICE_MAX_REVIEWS})
   --fetch-retries <n>          Default: 2
   --no-review-media            Omit review media
+  --rebuild-done-index         Ignore the resume sidecar and rebuild it from a
+                               full output scan (repair a suspected stale index)
   --task-deadline-ms <n>       Hard per-profile deadline (default: 150000)
   --stall-ms <n>               No-progress watchdog trigger, > task-deadline (default: 210000)
   --watchdog-interval-ms <n>   Heartbeat + stall-check cadence (default: 30000)
@@ -65,6 +67,7 @@ function parseArgs(argv) {
     const key = argv[index];
     if (key === '--help') return { help: true };
     if (key === '--no-review-media') { options.includeReviewMedia = false; continue; }
+    if (key === '--rebuild-done-index') { options.rebuildDoneIndex = true; continue; }
     if (!values.has(key)) throw new Error(`unknown option: ${key}`);
     if (index + 1 >= argv.length) throw new Error(`${key} requires a value`);
     const value = argv[++index];

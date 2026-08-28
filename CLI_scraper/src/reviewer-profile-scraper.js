@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const readline = require('readline');
 const { chromium } = require('playwright');
 const stealth = require('./stealth');
 const { iterateNdjsonRecords } = require('./ndjson-reader');
@@ -238,14 +239,89 @@ function writeReviewerList(listFile, reviewers, sourceFile) {
   fs.renameSync(temporary, listFile);
 }
 
-async function completedReviewerIds(outputFile) {
+function doneSidecarPath(outputFile) {
+  return `${outputFile}.done`;
+}
+
+// Cheap resume signal from a record line without materialising the ~120 KB
+// object (service_cap records carry 200 full reviews). Both top-level fields we
+// need sit at the very front: profileRecord/errorRecord always emit
+// {"extracted_at":..,"reviewer_id":"<digits>","reviewer":{..}|null,..}. Match the
+// reviewer_id immediately followed by its terminal(`{`)/error(`null`) marker so a
+// nested reviewer_id can never be picked up. Returns null when the front doesn't
+// match (schema drift) so the caller can fall back to a full parse.
+const RESUME_HEAD_RE = /"reviewer_id":"(\d+)","reviewer":(null|\{)/;
+function extractResumeSignal(line) {
+  const head = line.length > 600 ? line.slice(0, 600) : line;
+  const match = RESUME_HEAD_RE.exec(head);
+  if (!match) return null;
+  return { id: match[1], terminal: match[2] === '{' };
+}
+
+// Append one completed reviewer id to the sidecar index (terminal records only).
+// Append-only and written after the output record, so the sidecar can only ever
+// lag the output, never lead it — a crash re-fetches at most the in-flight window
+// (harmless duplicate terminal records that downstream dedups), and it can never
+// mark a not-done reviewer as done.
+function appendDoneId(doneFile, reviewerId) {
+  fs.appendFileSync(doneFile, `${reviewerId}\n`);
+}
+
+async function buildDoneIndexFromOutput(outputFile, doneFile, log) {
   const done = new Set();
-  if (!fs.existsSync(outputFile)) return done;
-  for await (const logical of iterateNdjsonRecords(outputFile)) {
-    const record = logical.value || {};
-    if (record.reviewer_id && record._status !== 'error') done.add(record.reviewer_id);
+  let fallbacks = 0;
+  const reader = readline.createInterface({ input: fs.createReadStream(outputFile), crlfDelay: Infinity });
+  for await (const line of reader) {
+    if (!line) continue;
+    const signal = extractResumeSignal(line);
+    if (signal) {
+      if (signal.terminal) done.add(signal.id);
+      continue;
+    }
+    // Front didn't match: parse this one line fully rather than guess. A torn
+    // final line from a killed write simply fails and is skipped (re-fetched).
+    fallbacks += 1;
+    try {
+      const record = JSON.parse(line);
+      if (record.reviewer_id && record._status !== 'error') done.add(record.reviewer_id);
+    } catch { /* incomplete/last line — the reviewer will be re-attempted */ }
   }
+  // Atomically (re)write the sidecar so future resumes read it instead of the
+  // multi-GB output.
+  const temporary = `${doneFile}.tmp-${process.pid}`;
+  fs.writeFileSync(temporary, done.size ? `${[...done].join('\n')}\n` : '');
+  fs.renameSync(temporary, doneFile);
+  if (log) log(`[REVIEWERS] built done-index for ${path.basename(outputFile)}: ${done.size} ids (full scan${fallbacks ? `, ${fallbacks} line-parse fallbacks` : ''})`);
   return done;
+}
+
+function loadDoneIndexSidecar(doneFile) {
+  const done = new Set();
+  const data = fs.readFileSync(doneFile, 'utf8');
+  let start = 0;
+  for (let i = 0; i < data.length; i += 1) {
+    if (data.charCodeAt(i) === 10) {
+      if (i > start) done.add(data.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (start < data.length) done.add(data.slice(start));
+  return done;
+}
+
+// Resume set of reviewer ids that already have a terminal (non-error) record.
+// Fast path: read the compact append-only sidecar. Bootstrap/fallback: if the
+// sidecar is absent (or --rebuild), scan the output once and (re)build it.
+async function completedReviewerIds(outputFile, options = {}) {
+  if (!fs.existsSync(outputFile)) return new Set();
+  const doneFile = options.doneFile || doneSidecarPath(outputFile);
+  const log = options.log;
+  if (!options.rebuild && fs.existsSync(doneFile)) {
+    const done = loadDoneIndexSidecar(doneFile);
+    if (log) log(`[REVIEWERS] resume from done-index sidecar ${path.basename(doneFile)}: ${done.size} ids`);
+    return done;
+  }
+  return buildDoneIndexFromOutput(outputFile, doneFile, log);
 }
 
 async function loadReviewerList(listFile) {
@@ -405,7 +481,7 @@ async function scrapeReviewerProfiles(reviewsFile, outputFile, options = {}) {
   }
 
   fs.mkdirSync(path.dirname(absoluteOutput), { recursive: true });
-  const done = await completedReviewerIds(absoluteOutput);
+  const done = await completedReviewerIds(absoluteOutput, { log });
   const queue = extracted.reviewers.filter((reviewer) => !done.has(reviewer.reviewer_id)).slice(0, maxReviewers);
   log(`[REVIEWERS] resume: ${done.size} complete; queued: ${queue.length}`);
 
@@ -527,6 +603,7 @@ async function scrapeReviewerProfiles(reviewsFile, outputFile, options = {}) {
           },
         };
         fs.appendFileSync(absoluteOutput, `${JSON.stringify(record)}\n`);
+        if (record._status !== 'error') appendDoneId(doneSidecarPath(absoluteOutput), record.reviewer_id);
         processed += 1;
         } catch (error) {
           const message = String(error.message || error).slice(0, 1000);
@@ -593,8 +670,11 @@ module.exports = {
   GOOGLE_REVIEWER_RE,
   REVIEWER_MAS_RE,
   SERVICE_MAX_REVIEWS,
+  appendDoneId,
   completedReviewerIds,
   completenessFor,
+  doneSidecarPath,
+  extractResumeSignal,
   expansionPageSizes,
   extractReviewerList,
   extractReviewerListFromDatabase,
