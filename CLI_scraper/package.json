@@ -8,7 +8,7 @@
     "start": "node bin/gmaps-crab.js",
     "bootstrap": "node scripts/bootstrap.js",
     "manifest": "node scripts/create-run-manifest.js",
-    "check:syntax": "node --check bin/gmaps-crab.js && node --check src/cli/run-poi.js && node --check src/cli/run-reviews.js && node --check src/cli/run-reviewers.js && node --check src/cli/run-reviewers-parallel.js && node --check src/ndjson-reader.js && node --check src/reviewer-profile-parser.js && node --check src/reviewer-profile-scraper.js && node --check src/reviewer-profile-parallel-scraper.js && node --check src/adaptive-concurrency.js && node --check scripts/analyze-reviewer-profiles.js && node --check scripts/analyze-structured-responses.js && node --check scripts/benchmark-reviewer-parallel.js && node --check scripts/build-reviewer-list-sqlite.js && node --check scripts/bootstrap.js && node --check scripts/create-run-manifest.js && node --check ../tools/local-monitor/monitor.js",
+    "check:syntax": "node --check bin/gmaps-crab.js && node --check src/cli/run-poi.js && node --check src/cli/run-reviews.js && node --check src/cli/run-reviewers.js && node --check src/cli/run-reviewers-parallel.js && node --check src/ndjson-reader.js && node --check src/async-deadline.js && node --check src/reviewer-profile-parser.js && node --check src/reviewer-profile-scraper.js && node --check src/reviewer-profile-parallel-scraper.js && node --check src/adaptive-concurrency.js && node --check scripts/analyze-reviewer-profiles.js && node --check scripts/analyze-structured-responses.js && node --check scripts/benchmark-reviewer-parallel.js && node --check scripts/build-reviewer-list-sqlite.js && node --check scripts/bootstrap.js && node --check scripts/create-run-manifest.js && node --check ../tools/local-monitor/monitor.js",
     "check:structured-taxonomy": "node scripts/analyze-structured-responses.js --self-test",
     "check:ndjson-keys": "node scripts/check-ndjson-key-coverage.js --self-test",
     "check:ndjson-mapping": "node scripts/check-ndjson-sqlite-mapping.js --self-test",
@@ -18,7 +18,8 @@
     "test:poi-resume": "node test/test-poi-resume.js",
     "test:reviewer-profile": "node test/test-reviewer-profile-parser.js",
     "test:reviewer-parallel": "node test/test-reviewer-profile-parallel.js",
-    "test": "npm run check:syntax && npm run check:structured-taxonomy && npm run check:ndjson-keys && npm run check:ndjson-mapping && npm run test:review-db-upsert && npm run test:db-image-downloader && npm run test:photo-url-refresh && npm run test:poi-resume && npm run test:reviewer-profile && npm run test:reviewer-parallel"
+    "test": "npm run check:syntax && npm run check:structured-taxonomy && npm run check:ndjson-keys && npm run check:ndjson-mapping && npm run test:review-db-upsert && npm run test:db-image-downloader && npm run test:photo-url-refresh && npm run test:poi-resume && npm run test:reviewer-profile && npm run test:reviewer-parallel-deadlock && npm run test:reviewer-parallel",
+    "test:reviewer-parallel-deadlock": "node test/test-reviewer-parallel-deadlock.js"
   },
   "keywords": [],
   "author": "",

@@ -28,12 +28,20 @@ Options:
   --max-profile-reviews <n>    1-${SERVICE_MAX_REVIEWS} (default: ${SERVICE_MAX_REVIEWS})
   --fetch-retries <n>          Default: 2
   --no-review-media            Omit review media
+  --task-deadline-ms <n>       Hard per-profile deadline (default: 150000)
+  --stall-ms <n>               No-progress watchdog trigger, > task-deadline (default: 210000)
+  --watchdog-interval-ms <n>   Heartbeat + stall-check cadence (default: 30000)
   --browser-executable <file>  Optional Chromium/Chrome executable
   --help                       Show this help
 
 One Chromium serves all isolated contexts. The four stable reviewer shards keep
 their original append-only output files, and existing non-error reviewer records
 are scanned before scheduling so a stopped serial run resumes without re-fetching.
+
+Self-healing: every browser/page operation is deadline-guarded, a hung rotation
+force-kills and relaunches Chromium, and a zero-progress watchdog restarts or (if
+the recovery machinery itself wedges) exits non-zero for the supervisor to
+respawn. The run scripts wrap node in a flock'd until-loop for that respawn.
 `);
 }
 
@@ -51,6 +59,7 @@ function parseArgs(argv) {
     '--run-root', '--input', '--output-dir', '--live-status', '--concurrency',
     '--request-interval-ms', '--window-size', '--browser-restart-every',
     '--max-reviewers', '--max-profile-reviews', '--fetch-retries', '--browser-executable',
+    '--task-deadline-ms', '--stall-ms', '--watchdog-interval-ms',
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
@@ -66,18 +75,28 @@ function parseArgs(argv) {
       '--browser-restart-every': 'browserRestartEvery', '--max-reviewers': 'maxReviewers',
       '--max-profile-reviews': 'maxProfileReviews', '--fetch-retries': 'maxFetchRetries',
       '--browser-executable': 'browserExecutablePath',
+      '--task-deadline-ms': 'taskDeadlineMs', '--stall-ms': 'stallMs',
+      '--watchdog-interval-ms': 'watchdogIntervalMs',
     }[key];
     options[property] = value;
   }
   for (const key of ['concurrency', 'requestIntervalMs', 'windowSize', 'browserRestartEvery', 'maxProfileReviews', 'maxFetchRetries']) {
     options[key] = Number(options[key]);
   }
-  if (options.maxReviewers != null) options.maxReviewers = Number(options.maxReviewers);
+  for (const key of ['maxReviewers', 'taskDeadlineMs', 'stallMs', 'watchdogIntervalMs']) {
+    if (options[key] != null) options[key] = Number(options[key]);
+  }
   for (const key of ['concurrency', 'windowSize', 'browserRestartEvery', 'maxProfileReviews']) {
     if (!Number.isInteger(options[key]) || options[key] < 1) throw new Error(`${key} must be a positive integer`);
   }
   for (const key of ['requestIntervalMs', 'maxFetchRetries']) {
     if (!Number.isInteger(options[key]) || options[key] < 0) throw new Error(`${key} must be a non-negative integer`);
+  }
+  for (const key of ['taskDeadlineMs', 'stallMs', 'watchdogIntervalMs']) {
+    if (options[key] != null && (!Number.isInteger(options[key]) || options[key] < 1)) throw new Error(`--${key} must be a positive integer`);
+  }
+  if (options.stallMs != null && options.taskDeadlineMs != null && !(options.stallMs > options.taskDeadlineMs)) {
+    throw new Error('--stall-ms must be greater than --task-deadline-ms');
   }
   if (options.maxReviewers != null && (!Number.isInteger(options.maxReviewers) || options.maxReviewers < 1)) throw new Error('--max-reviewers must be a positive integer');
   if (options.maxProfileReviews > SERVICE_MAX_REVIEWS) throw new Error(`--max-profile-reviews cannot exceed ${SERVICE_MAX_REVIEWS}`);

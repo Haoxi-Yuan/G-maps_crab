@@ -2,9 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { spawnSync } = require('child_process');
 const { chromium } = require('playwright');
 const stealth = require('./stealth');
 const { iterateNdjsonRecords } = require('./ndjson-reader');
+const { withDeadline } = require('./async-deadline');
 const {
   parseReviewerMasResponse,
   setReviewerMasMediaEnabled,
@@ -131,16 +134,22 @@ function errorRecord(sourceReviewer, message, metadata) {
 async function fetchReviewer(browser, task, options, gate) {
   const started = Date.now();
   let lastError = null;
+  const createContext = options.createContext || stealth.createStealthContext;
+  const contextDeadlineMs = options.contextDeadlineMs ?? 30000;
+  const closeDeadlineMs = options.closeDeadlineMs ?? 15000;
+  const flagForceRotation = () => { if (options.onForceRotation) options.onForceRotation(); };
   for (let fetchAttempt = 1; fetchAttempt <= options.maxFetchRetries + 1; fetchAttempt += 1) {
     let context;
     let page;
     try {
       await gate.acquire();
-      ({ context, page } = await stealth.createStealthContext(browser, {
+      // Every await below can hang under load; each is deadline-wrapped so the
+      // lane always progresses. A hung context/close flags a forced rotation.
+      ({ context, page } = await withDeadline(createContext(browser, {
         geoConfig: { timezone: 'Asia/Singapore', locale: 'en-US', languages: ['en-US', 'en'] },
         blockImages: true,
         blockHeavyResources: false,
-      }));
+      }), contextDeadlineMs, 'createStealthContext', flagForceRotation));
       const sourceReviewer = task.reviewer;
       const initialFetch = await fetchMasFromPage(page, sourceReviewer.reviewer_id, options);
       let parsed = parseReviewerMasResponse(initialFetch.masText, {
@@ -216,8 +225,10 @@ async function fetchReviewer(browser, task, options, gate) {
         throttle: isThrottleError(lastError),
       };
     } finally {
-      await page?.close().catch(() => {});
-      await context?.close().catch(() => {});
+      // A hung close must not wedge the lane: bound it, and if it times out flag
+      // the browser for a forced rotation (the force-kill reaps the leaked page).
+      if (page) await withDeadline(page.close(), closeDeadlineMs, 'page.close', flagForceRotation).catch(() => {});
+      if (context) await withDeadline(context.close(), closeDeadlineMs, 'context.close', flagForceRotation).catch(() => {});
     }
   }
   throw new Error('unreachable reviewer retry state');
@@ -227,6 +238,37 @@ async function launchBrowser(options) {
   const launchOptions = { headless: true, args: stealth.buildLaunchArgs() };
   if (options.browserExecutablePath) launchOptions.executablePath = options.browserExecutablePath;
   return chromium.launch(launchOptions);
+}
+
+// Reap stray chrome-headless-shell processes. Every Playwright launch writes its
+// user-data-dir under TMPDIR (the run scripts set a run-scoped TMPDIR), and each
+// child carries `--user-data-dir=<that dir>` in argv, so a pgrep on the scope dir
+// matches exactly this run's browsers and nothing else on a shared host. On a dev
+// box where TMPDIR is the shared OS default, the pgrep sweep is skipped and only
+// explicitly tracked PIDs are killed.
+function reapOrphanChromium(scopeDir, keepPids = new Set(), log = () => {}) {
+  const killed = [];
+  const kill = (pid) => {
+    if (!pid || pid === process.pid || keepPids.has(pid)) return;
+    try { process.kill(pid, 'SIGKILL'); killed.push(pid); } catch { /* already gone */ }
+  };
+  const osTmp = os.tmpdir();
+  const runScoped = typeof scopeDir === 'string'
+    && path.isAbsolute(scopeDir)
+    && path.resolve(scopeDir) !== path.resolve(osTmp);
+  if (runScoped) {
+    try {
+      const result = spawnSync('pgrep', ['-f', '--', scopeDir], { encoding: 'utf8' });
+      if (result.status === 0 && result.stdout) {
+        for (const line of result.stdout.split('\n')) {
+          const pid = Number(line.trim());
+          if (Number.isInteger(pid)) kill(pid);
+        }
+      }
+    } catch { /* pgrep unavailable; tracked-pid path below still runs */ }
+  }
+  if (killed.length) log(`[REVIEWERS PARALLEL] reaped ${killed.length} stray chromium under ${scopeDir}`);
+  return killed;
 }
 
 async function scrapeReviewerProfilesParallel(configuration, options = {}) {
@@ -246,10 +288,27 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
   const log = options.log || console.log;
   const writeStatus = makeAtomicStatusWriter(options.liveStatusFile ? path.resolve(options.liveStatusFile) : null);
 
+  // Self-heal knobs. Defaults keep today's behavior; every unbounded await is
+  // now deadline-guarded and a watchdog force-restarts a stalled browser.
+  const taskDeadlineMs = options.taskDeadlineMs ?? 150000;
+  const stallMs = options.stallMs ?? 210000;
+  const watchdogIntervalMs = options.watchdogIntervalMs ?? 30000;
+  const rotationCloseDeadlineMs = options.rotationCloseDeadlineMs ?? 20000;
+  const launchDeadlineMs = options.launchDeadlineMs ?? 60000;
+  const launchRetries = options.launchRetries ?? 3;
+  const navigationTimeoutMs = options.navigationTimeoutMs ?? 45000;
+  const contentShortfallThreshold = options.contentShortfallThreshold ?? 0.15;
+  const userDataScopeDir = options.userDataScopeDir ?? process.env.TMPDIR ?? null;
+  // Injectable seams (production defaults = real implementations).
+  const browserFactory = options.browserFactory || (() => launchBrowser(options));
+  const reapOrphans = options.reapOrphans || ((keep) => reapOrphanChromium(userDataScopeDir, keep, log));
+  const onExit = options.onExit || ((code) => process.exit(code));
+
   if (!Number.isInteger(targetConcurrency) || targetConcurrency < 1) throw new Error('concurrency must be a positive integer');
   if (!Number.isInteger(requestIntervalMs) || requestIntervalMs < 0) throw new Error('requestIntervalMs must be a non-negative integer');
   if (!Number.isInteger(windowSize) || windowSize < targetConcurrency) throw new Error('windowSize must be at least concurrency');
   if (!Number.isInteger(browserRestartEvery) || browserRestartEvery < windowSize) throw new Error('browserRestartEvery must be at least windowSize');
+  if (!(stallMs > taskDeadlineMs)) throw new Error('stallMs must be greater than taskDeadlineMs');
 
   for (const shard of shards) {
     if (!fs.existsSync(shard.listFile)) throw new Error(`reviewer list not found: ${shard.listFile}`);
@@ -284,7 +343,11 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
   const iterator = pendingReviewers(shards, doneByShard)[Symbol.asyncIterator]();
   const gate = new SmoothGate(requestIntervalMs);
   const started = Date.now();
-  let browser = await launchBrowser(options);
+  const browserPids = new Set();
+  // Reap strays from a previously crashed run that shared this TMPDIR.
+  reapOrphans(browserPids);
+  const trackBrowser = (instance) => { const pid = instance?.process?.()?.pid; if (pid) browserPids.add(pid); return instance; };
+  let browser = trackBrowser(await withDeadline(browserFactory(), launchDeadlineMs, 'launchBrowser'));
   let processed = 0;
   let terminalProfiles = 0;
   let errors = 0;
@@ -302,8 +365,12 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
   let iteratorLock = Promise.resolve();
   let rotationRequested = false;
   let rotationReason = null;
-  let rotationPromise = null;
+  let rotationLock = Promise.resolve();
   let rotationWaiters = [];
+  let forceRotation = false;
+  let lastProgressAt = Date.now();
+  let watchdogEscalations = 0;
+  let fatalExit = false;
   let windowStarted = Date.now();
   let windowResults = [];
   let lastWindowMetrics = null;
@@ -346,6 +413,21 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
       result.record.completeness?.stop_reason === 'fetch_error'
     )).length;
     const windowThrottles = results.filter((result) => result.throttle).length;
+    // Completeness health: among terminal, non-hidden profiles, the fraction
+    // that returned fewer reviews than they should have. Catches silent content
+    // drift (100% HTTP, fewer reviews) without any per-reviewer storage.
+    const terminal = results.filter((result) => {
+      const stop = result.record.completeness?.stop_reason;
+      return stop === 'complete' || stop === 'service_cap' || stop === 'requested_limit';
+    });
+    const shortfalls = terminal.filter((result) => {
+      const c = result.record.completeness || {};
+      const expected = Math.min(
+        Number.isFinite(c.visible_review_count) ? c.visible_review_count : Infinity,
+        maxProfileReviews,
+      );
+      return Number.isFinite(c.returned_review_count) && c.returned_review_count < expected;
+    }).length;
     return {
       size: results.length,
       partial,
@@ -357,6 +439,7 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
       error_rate: Number((windowErrors / results.length).toFixed(4)),
       operational_error_rate: Number((windowOperationalErrors / results.length).toFixed(4)),
       throttle_rate: Number((windowThrottles / results.length).toFixed(4)),
+      shortfall_rate: terminal.length ? Number((shortfalls / terminal.length).toFixed(4)) : 0,
       returned_reviews: results.reduce((sum, result) => sum + result.returnedReviews, 0),
     };
   };
@@ -371,24 +454,72 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
     await new Promise((resolve) => rotationWaiters.push(resolve));
   };
 
-  const maybeRotate = async () => {
-    if (!rotationRequested || inFlight > 0) return;
-    if (rotationPromise) { await rotationPromise; return; }
-    rotationPromise = (async () => {
-      const reason = rotationReason || 'requested';
-      await browser.close().catch(() => {});
-      if (!stopRequested) browser = await launchBrowser(options);
+  // Force-kill the current browser: SIGKILL its process tree, then reap any
+  // stray children scoped to this run's TMPDIR. Used when a graceful close hangs.
+  const forceKillBrowser = () => {
+    try { browser?.process()?.kill('SIGKILL'); } catch { /* already gone */ }
+    reapOrphans(new Set());
+  };
+
+  const drainRotationWaiters = () => {
+    const waiters = rotationWaiters;
+    rotationWaiters = [];
+    for (const resolve of waiters) resolve();
+  };
+
+  // Hardened rotation. Serialized by rotationLock so the watchdog and graceful
+  // path can never double-launch. Every await is deadline-wrapped; a hung close
+  // escalates to SIGKILL, a hung launch retries then exits for the supervisor.
+  // Waiter release + flag reset live in `finally`, so a throw can never wedge
+  // the pool forever (the original deadlock bug).
+  const rotateBrowser = async ({ force = false } = {}) => {
+    if (!rotationRequested && !force) return;
+    if (!force && inFlight > 0) return;
+    const previous = rotationLock;
+    let release;
+    rotationLock = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      if (!rotationRequested && !force) return;
+      const reason = force ? 'forced' : (rotationReason || 'requested');
+      const hardClose = force || forceRotation;
+      if (hardClose) {
+        forceKillBrowser();
+      } else {
+        await withDeadline(browser.close(), rotationCloseDeadlineMs, 'browser.close')
+          .catch(() => forceKillBrowser());
+      }
+      forceRotation = false;
+      if (!stopRequested) {
+        let launched = null;
+        for (let attempt = 1; attempt <= launchRetries && !launched; attempt += 1) {
+          try {
+            launched = await withDeadline(browserFactory(), launchDeadlineMs, 'launchBrowser');
+          } catch (error) {
+            log(`[REVIEWERS PARALLEL] launch attempt ${attempt}/${launchRetries} failed: ${error.message}`);
+            reapOrphans(new Set());
+            if (attempt < launchRetries) await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
+        if (!launched) {
+          fatalExit = true;
+          log('[REVIEWERS PARALLEL] browser relaunch exhausted; exiting for supervisor respawn');
+        } else {
+          browser = trackBrowser(launched);
+        }
+      }
       processedSinceRestart = 0;
       browserRestarts += 1;
+      log(`[REVIEWERS PARALLEL] rotated Chromium after ${processed} profiles (${reason})`);
+    } finally {
       rotationRequested = false;
       rotationReason = null;
-      const waiters = rotationWaiters;
-      rotationWaiters = [];
-      for (const resolve of waiters) resolve();
-      log(`[REVIEWERS PARALLEL] rotated Chromium after ${processed} profiles (${reason})`);
-    })();
-    try { await rotationPromise; } finally { rotationPromise = null; }
+      drainRotationWaiters();
+      release();
+    }
+    if (fatalExit) { statusSnapshot('watchdog_exit'); onExit(1); }
   };
+  const maybeRotate = () => rotateBrowser({ force: false });
 
   const takeTask = async () => {
     while (rotationRequested && !stopRequested) await waitForRotation();
@@ -412,6 +543,7 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
     fs.appendFileSync(shards[task.shardIndex].outputFile, `${JSON.stringify(result.record)}\n`);
     processed += 1;
     processedSinceRestart += 1;
+    lastProgressAt = Date.now();
     returnedReviews += result.returnedReviews;
     if (result.record._status === 'error') errors += 1;
     else terminalProfiles += 1;
@@ -438,12 +570,45 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
         metrics.control = 'hold';
       }
       if (!browser.isConnected() || metrics.throttle_rate > 0.01) requestRotation('unhealthy window');
+      // Content shortfall: a fresh browser often clears renderer-degraded partial
+      // responses. Rotate but do NOT touch concurrency (data quality != overload).
+      else if (metrics.shortfall_rate > contentShortfallThreshold) requestRotation('content shortfall');
       lastWindowMetrics = metrics;
       statusSnapshot('reviewers', metrics);
       log(`[REVIEWERS PARALLEL] processed=${processed}/${runLimit} window=${metrics.profiles_per_minute}/min p95=${metrics.duration_p95_ms}ms errors=${Math.round(metrics.error_rate * metrics.size)} operational_errors=${Math.round(metrics.operational_error_rate * metrics.size)} throttles=${Math.round(metrics.throttle_rate * metrics.size)} concurrency=${currentConcurrency}`);
     }
     if (processedSinceRestart >= browserRestartEvery) requestRotation('periodic');
   };
+
+  // Zero-progress watchdog + heartbeat. Refreshes updated_at every tick so
+  // external monitors see liveness between the 200-profile windows; force-kills
+  // and relaunches a stalled browser, and exits (for the supervisor) if the
+  // recovery machinery itself is wedged. stallMs > taskDeadlineMs guarantees a
+  // single hung task self-heals via its own deadline before the watchdog fires.
+  const watchdog = setInterval(() => {
+    writeStatus({
+      heartbeat_at: new Date().toISOString(),
+      in_flight: inFlight,
+      processed,
+      concurrency: currentConcurrency,
+      rotation_requested: rotationRequested,
+      seconds_since_progress: Number(((Date.now() - lastProgressAt) / 1000).toFixed(1)),
+    });
+    if (stopRequested) return;
+    const stalled = Date.now() - lastProgressAt > stallMs;
+    if (!stalled) return;
+    if (watchdogEscalations >= 1) {
+      log(`[REVIEWERS PARALLEL] watchdog: still stalled after force-rotation; exiting for supervisor respawn`);
+      statusSnapshot('watchdog_exit');
+      onExit(1);
+      return;
+    }
+    watchdogEscalations += 1;
+    lastProgressAt = Date.now();
+    log(`[REVIEWERS PARALLEL] watchdog: no progress for ${(stallMs / 1000)}s (in_flight=${inFlight}); forcing browser restart`);
+    rotateBrowser({ force: true }).catch((error) => log(`[REVIEWERS PARALLEL] watchdog force-rotate error: ${error.message}`));
+  }, watchdogIntervalMs);
+  if (typeof watchdog.unref === 'function') watchdog.unref();
 
   try {
     const worker = async (laneIndex) => {
@@ -455,14 +620,30 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
         if (!task) return;
         inFlight += 1;
         try {
-          const result = await fetchReviewer(browser, task, {
+          // Hard per-task deadline: guarantees inFlight always returns to 0 in
+          // bounded time even if an unforeseen op hangs, which unblocks rotation.
+          const result = await withDeadline(fetchReviewer(browser, task, {
             sourceReviewsFile: configuration.sourceReviewsFile,
             maxProfileReviews,
             maxFetchRetries,
             includeReviewMedia,
             initialWaitMs: options.initialWaitMs ?? 2500,
-          }, gate);
+            navigationTimeoutMs,
+            createContext: options.createContext,
+            contextDeadlineMs: options.contextDeadlineMs,
+            closeDeadlineMs: options.closeDeadlineMs,
+            onForceRotation: () => { forceRotation = true; },
+          }, gate), taskDeadlineMs, 'fetchReviewer', () => { forceRotation = true; });
           recordResult(task, result);
+        } catch (error) {
+          // A deadline (or any escaped throw) becomes a retryable fetch_error so
+          // resume re-attempts it; recordResult still advances progress + inFlight.
+          const record = errorRecord(task.reviewer, String(error.message || error).slice(0, 1000), {
+            sourceReviewsFile: configuration.sourceReviewsFile,
+            maxProfileReviews,
+            fetchAttempt: 0,
+          });
+          recordResult(task, { record, durationMs: 0, attempts: 0, returnedReviews: 0, throttle: false });
         } finally {
           inFlight -= 1;
           await maybeRotate();
@@ -472,7 +653,8 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
     await Promise.all(Array.from({ length: targetConcurrency }, (_, laneIndex) => worker(laneIndex)));
     if (rotationRequested) await maybeRotate();
   } finally {
-    await browser.close().catch(() => {});
+    clearInterval(watchdog);
+    await withDeadline(browser.close(), rotationCloseDeadlineMs, 'browser.close').catch(() => forceKillBrowser());
     process.removeListener('SIGINT', onSigint);
     process.removeListener('SIGTERM', onSigterm);
   }
@@ -500,5 +682,6 @@ module.exports = {
   SmoothGate,
   isThrottleError,
   pendingReviewers,
+  reapOrphanChromium,
   scrapeReviewerProfilesParallel,
 };

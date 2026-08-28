@@ -20,6 +20,7 @@
 const fs = require('fs');
 const readline = require('readline');
 const { buildContainsCheck } = require('./filter-by-boundary');
+const { withDeadline } = require('./async-deadline');
 
 // ============================================
 // Boundary pre-filter (skip cells outside boundary)
@@ -134,25 +135,6 @@ function pointsToBBox(points, paddingKm = 0.5) {
 // ============================================
 // pb= template capture
 // ============================================
-
-async function withDeadline(promise, timeoutMs, label, onTimeout) {
-  let timer;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          if (onTimeout) onTimeout();
-          const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-          error.code = 'OPERATION_TIMEOUT';
-          reject(error);
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 async function capturePbTemplate(page, query, lat, lng, options = {}) {
   let capturedPb = null;

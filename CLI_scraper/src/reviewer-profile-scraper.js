@@ -10,6 +10,29 @@ const {
   setReviewerMasMediaEnabled,
   setReviewerMasPageSize,
 } = require('./reviewer-profile-parser');
+const { withDeadline } = require('./async-deadline');
+const { evaluateWithTimeout } = require('./api-review-fetcher');
+
+// Bound every in-page fetch / body wait so a stalled renderer can never wedge a
+// worker. Same failure the review-fetch path already hit (two Singapore shards
+// frozen a day each); the fix there was evaluateWithTimeout, applied here too.
+const MAS_BODY_TIMEOUT_MS = Number(process.env.REVIEWER_MAS_BODY_TIMEOUT_MS) || 30000;
+const MAS_EVAL_TIMEOUT_MS = Number(process.env.REVIEWER_MAS_EVAL_TIMEOUT_MS) || 40000;
+
+// In-page MAS fetch with an AbortController so it aborts even when the renderer
+// is alive-but-slow, and an outer evaluate deadline in case the renderer is gone.
+async function fetchMasInPage(page, url, timeoutMs = MAS_EVAL_TIMEOUT_MS) {
+  return evaluateWithTimeout(page, async ({ target, budgetMs }) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), budgetMs);
+    try {
+      const response = await fetch(target, { credentials: 'include', signal: controller.signal });
+      return { status: response.status, ok: response.ok, text: await response.text() };
+    } finally {
+      clearTimeout(timer);
+    }
+  }, { target: url, budgetMs: timeoutMs }, timeoutMs);
+}
 
 const GOOGLE_REVIEWER_RE = /\/maps\/contrib\/(\d{8,})/;
 const REVIEWER_MAS_RE = /\/locationhistory\/preview\/mas(?:\?|$)/;
@@ -274,7 +297,8 @@ async function fetchMasFromPage(page, reviewerId, options = {}) {
   const profileUrl = `https://www.google.com/maps/contrib/${reviewerId}/reviews?hl=${encodeURIComponent(locale)}`;
   await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: options.navigationTimeoutMs || 60000 });
   await page.waitForTimeout(options.initialWaitMs || 2500);
-  await Promise.allSettled(pendingBodies);
+  // Bound the body wait: a single stuck response.text() must not hang the load.
+  await withDeadline(Promise.allSettled(pendingBodies), MAS_BODY_TIMEOUT_MS, 'mas-bodies').catch(() => {});
   masUrl ||= fallbackMasUrl;
 
   if (!masUrl) {
@@ -285,11 +309,9 @@ async function fetchMasFromPage(page, reviewerId, options = {}) {
   if (!masUrl) throw new Error('reviewer MAS preload URL was not captured');
 
   if (!masText) {
-    masText = await page.evaluate(async (url) => {
-      const response = await fetch(url, { credentials: 'include' });
-      if (!response.ok) throw new Error(`reviewer MAS HTTP ${response.status}`);
-      return response.text();
-    }, masUrl);
+    const fallback = await fetchMasInPage(page, masUrl);
+    if (!fallback.ok) throw new Error(`reviewer MAS HTTP ${fallback.status}`);
+    masText = fallback.text;
   }
   page.off('response', responseHandler);
   return { profileUrl: page.url(), masUrl, masText };
@@ -297,10 +319,7 @@ async function fetchMasFromPage(page, reviewerId, options = {}) {
 
 async function fetchExpandedMas(page, masUrl, pageSize) {
   const expandedUrl = setReviewerMasPageSize(masUrl, pageSize);
-  const result = await page.evaluate(async (url) => {
-    const response = await fetch(url, { credentials: 'include' });
-    return { status: response.status, text: await response.text() };
-  }, expandedUrl);
+  const result = await fetchMasInPage(page, expandedUrl);
   if (result.status < 200 || result.status >= 300) throw new Error(`expanded reviewer MAS HTTP ${result.status}`);
   return { url: expandedUrl, text: result.text };
 }
