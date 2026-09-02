@@ -67,6 +67,61 @@ bash tools/local-monitor/scraper-monitor.sh
 
 See [tools/local-monitor/README.md](tools/local-monitor/README.md).
 
+## Active run: Singapore reviewer profiles, split across three hosts
+
+Started 2026-09-01 from commit `6bea81f`. Stage 4 (reviewer profiles) for the
+Singapore review database, resumed after 1,207,260 of 4,191,230 reviewers were
+already collected on `ual-chark`.
+
+| Host | Concurrency | Quota | Measured | Run root |
+| --- | ---: | ---: | ---: | --- |
+| `ual-chark` | 27 | 1,027,884 | 187.7/min | `/data/haoxi/CLI_scraper/experiments/reviewer_split_chark_20260901` |
+| `labpro-ual2` (M1) | 16 | 830,686 | 115.5/min | `~/gmaps-production/reviewer_run` |
+| `labpro-kun` (M3) | 16 | 1,125,400 | 158.2/min | `~/gmaps-production/reviewer_run` |
+
+All three use identical data-affecting options — `--request-interval-ms 150`,
+`--window-size 200`, `--browser-restart-every 2800`, `--max-profile-reviews 200`,
+`--fetch-retries 2`. Only `--concurrency` differs, and it was chosen per host
+from a measured 4→8→12→16 ladder rather than from core counts.
+
+Two properties of the reviewer list drive the split and are easy to get wrong:
+
+- **The list is ordered by reviewer activity, heaviest first.** Head-of-shard
+  reviewers average 78.6 public reviews, the middle 7.1, the tail 9.8. Any
+  contiguous split therefore hands one host most of the expensive work. The
+  remaining list is instead **interleaved** by weight, so each host gets a
+  statistically identical mix (verified: means 13.6/14.2/14.6, identical p50).
+- **Cumulative `profiles_per_minute` is not a valid ETA.** Throughput rises over
+  a run purely because the workload lightens. Compare hosts with
+  `returned_reviews` per minute, or on matched slices.
+
+Prior output on `ual-chark` (59 GB, `reviewer_profiles_full_20260824/output/`)
+is untouched; each host writes fresh shards. The final dataset is the union of
+the old four shards plus the three hosts' new ones, deduplicated by
+`reviewer_id`.
+
+Resume indexes (`output/reviewers.part-N.ndjson.done`) now exist for the old
+run, so future resumes are O(ids) instead of a 55 GB rescan.
+
+Operational notes:
+
+- Neither Mac has `tmux`; both use `nohup` plus a supervisor loop. Node 22 is
+  installed per-user under `~/gmaps-production/.runtime/node`, and
+  `~/gmaps-production/env.sh` must be sourced first — background jobs cannot
+  rely on `.zshrc`.
+- `labpro-kun` has limited free space for its quota (~63 GB needed). A disk
+  guard at `~/gmaps-production/disk-guard.sh` stops the run gracefully below
+  10 GB free.
+- `ual-chark` is shared and runs unrelated jobs under the same account. Scope
+  every process action to explicit PIDs or the run's own `TMPDIR`; never match
+  on user name alone.
+- A reviewer run now claims its output directory with
+  `output/.reviewer-writer.lock` and refuses to start while another live writer
+  holds it, so a supervisor restart cannot race an orphaned earlier process. A
+  lock left by a killed run is reclaimed automatically once its pid is gone; a
+  lock written by another host is never reclaimed. The three runs above predate
+  this and are unaffected until their next restart.
+
 ## Data safety
 
 Collected and generated content is intentionally outside version control:
