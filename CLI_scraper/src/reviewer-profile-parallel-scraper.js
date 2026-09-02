@@ -8,6 +8,7 @@ const { chromium } = require('playwright');
 const stealth = require('./stealth');
 const { iterateNdjsonRecords } = require('./ndjson-reader');
 const { withDeadline } = require('./async-deadline');
+const { acquireWriterLocks } = require('./writer-lock');
 const {
   parseReviewerMasResponse,
   setReviewerMasMediaEnabled,
@@ -317,6 +318,12 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
     fs.mkdirSync(path.dirname(shard.outputFile), { recursive: true });
   }
 
+  // Claim the shard outputs before the resume scan, so a second run fails fast
+  // instead of spending minutes rebuilding an index it may not get to use. The
+  // lock lives in this process for the life of the run; see writer-lock.js for
+  // why a supervisor-held lock is not enough.
+  const releaseWriterLocks = acquireWriterLocks(shards.map((shard) => path.dirname(shard.outputFile)), { log });
+
   log(`[REVIEWERS PARALLEL] resolving resume state for ${shards.length} shards (done-index sidecar, or one-time full scan to bootstrap it)`);
   const doneByShard = await Promise.all(shards.map((shard) => completedReviewerIds(shard.outputFile, {
     doneFile: shard.doneFile, rebuild: options.rebuildDoneIndex === true, log,
@@ -327,6 +334,7 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
   log(`[REVIEWERS PARALLEL] total=${totalReviewers} complete=${completedBeforeStart} pending=${pendingAtStart} run_limit=${runLimit}`);
 
   if (runLimit === 0) {
+    releaseWriterLocks();
     writeStatus({ phase: 'complete', total_reviewers: totalReviewers, completed_before_start: completedBeforeStart, processed: 0, errors: 0 });
     return { totalReviewers, completedBeforeStart, processed: 0, errors: 0, elapsedSeconds: 0 };
   }
@@ -666,6 +674,10 @@ async function scrapeReviewerProfilesParallel(configuration, options = {}) {
     await withDeadline(browser.close(), rotationCloseDeadlineMs, 'browser.close').catch(() => forceKillBrowser());
     process.removeListener('SIGINT', onSigint);
     process.removeListener('SIGTERM', onSigterm);
+    // Released here on every exit from the worker loop, including a throw. A
+    // throw before this point still releases via the process 'exit' handler,
+    // and a hard kill leaves a lock the next run reclaims as stale.
+    releaseWriterLocks();
   }
 
   const elapsedSeconds = (Date.now() - started) / 1000;

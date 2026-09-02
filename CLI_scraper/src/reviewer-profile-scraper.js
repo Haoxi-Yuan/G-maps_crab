@@ -255,7 +255,16 @@ function extractResumeSignal(line) {
   const head = line.length > 600 ? line.slice(0, 600) : line;
   const match = RESUME_HEAD_RE.exec(head);
   if (!match) return null;
-  return { id: match[1], terminal: match[2] === '{' };
+  // `match[1]` is a V8 sliced string pointing into `head`, which is itself a
+  // slice of `line`. Callers keep the id (buildDoneIndexFromOutput stores
+  // millions of them in a Set), and a retained slice pins its whole parent —
+  // so every stored id held its entire source record, up to ~120 KB for a
+  // service_cap profile carrying 200 reviews. The bootstrap scan then grew
+  // with (ids x record size) rather than (ids x id length): a 13.7 GB shard
+  // reached 28 GB RSS without finishing, and OOMed under the default heap.
+  // Measured: 100153 bytes retained per id before, 81 bytes after. The id is
+  // /\d+/, so the latin1 round-trip is lossless and forces a flat copy.
+  return { id: Buffer.from(match[1], 'latin1').toString('latin1'), terminal: match[2] === '{' };
 }
 
 // Append one completed reviewer id to the sidecar index (terminal records only).
