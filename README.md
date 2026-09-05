@@ -121,6 +121,23 @@ Operational notes:
   lock left by a killed run is reclaimed automatically once its pid is gone; a
   lock written by another host is never reclaimed. The three runs above predate
   this and are unaffected until their next restart.
+- **Watch the ephemeral-port pool on long runs.** `labpro-ual2` finished its
+  830,686 profiles with 14,074 error records, every one of them
+  `net::ERR_INTERNET_DISCONNECTED`. The network was fine: 16,400 sockets sat in
+  TIME_WAIT and never drained, holding 16,374 of the 16,384 ephemeral ports, so
+  the kernel failed every new `connect()` with `EADDRNOTAVAIL` while ICMP and
+  already-established connections kept working. Nothing in the run looked wrong
+  — it kept "succeeding" into a dead network, and the errors are recoverable
+  only because error records stay out of the done index. `labpro-kun` ran the
+  same workload at the same concurrency with 425 TIME_WAIT entries, so this is
+  a stuck-reclaim anomaly, not a rate limit. Two scripts address it, and
+  neither lowers concurrency:
+  `scripts/tune-net-ports.sh` widens the pool (macOS 16,384 ports / 30 s
+  TIME_WAIT → 49,152 / 4 s, a 22x margin; run it with `sudo` before a long
+  scrape, it resets on reboot) and `scripts/net-port-guard.sh` watches usage
+  during the run and sends a graceful stop at 90%, turning silent loss into a
+  resumable checkpoint. Run `scripts/tune-net-ports.sh --show` to report the
+  current pool without privileges.
 
 ## Data safety
 
