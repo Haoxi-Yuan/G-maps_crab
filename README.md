@@ -73,11 +73,22 @@ Started 2026-09-01 from commit `6bea81f`. Stage 4 (reviewer profiles) for the
 Singapore review database, resumed after 1,207,260 of 4,191,230 reviewers were
 already collected on `ual-chark`.
 
-| Host | Concurrency | Quota | Measured | Run root |
-| --- | ---: | ---: | ---: | --- |
-| `ual-chark` | 27 | 1,027,884 | 187.7/min | `/data/haoxi/CLI_scraper/experiments/reviewer_split_chark_20260901` |
-| `labpro-ual2` (M1) | 16 | 830,686 | 115.5/min | `~/gmaps-production/reviewer_run` |
-| `labpro-kun` (M3) | 16 | 1,125,400 | 158.2/min | `~/gmaps-production/reviewer_run` |
+| Host | Concurrency | Quota | Terminal | Errors | Run root |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `ual-chark` | 27 | 1,027,884 | 1,026,316 | 1,568 | `/data/haoxi/CLI_scraper/experiments/reviewer_split_chark_20260901` |
+| `labpro-ual2` (M1) | 16 | 830,686 | 816,612 | 14,074 | `~/gmaps-production/reviewer_run` |
+| `labpro-kun` (M3) | 16 | 1,125,400 | 1,123,674 | 1,726 | `~/gmaps-production/reviewer_run` |
+
+All three finished (2026-09-04 to 09-07). Counting the 1,207,260 collected before
+the split, that is 4,173,862 of 4,191,230 reviewers, and the 17,368 gap is exactly
+the sum of the three error counts — error records deliberately stay out of the
+done index, so every gap is re-fetchable.
+
+M1's 14,074 are being re-scraped on the idle `ual-chark` rather than on M1
+itself, since the two hosts draw from the same list and chark was free:
+`experiments/reviewer_rescrape_m1_20260907`, concurrency 27, same data-affecting
+options. The list for it is M1's original 830,686 minus M1's done index, which
+differenced to exactly 14,074.
 
 All three use identical data-affecting options — `--request-interval-ms 150`,
 `--window-size 200`, `--browser-restart-every 2800`, `--max-profile-reviews 200`,
