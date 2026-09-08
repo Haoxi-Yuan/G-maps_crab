@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS reviewer_profiles (
   is_complete                     INTEGER,
   stop_reason                     TEXT,
   visible_review_count            INTEGER,
+  completeness_returned_review_count INTEGER,
+  error_message                   TEXT,
 
   activity_window_basis           TEXT,
   activity_is_full_history        INTEGER,
@@ -165,9 +167,28 @@ const PROFILE_COLUMNS = [
   'public_review_count', 'total_review_contributions', 'public_rating_count',
   'total_rating_contributions', 'returned_review_count', 'returned_photo_count',
   'is_complete', 'stop_reason', 'visible_review_count',
+  'completeness_returned_review_count', 'error_message',
   ...ACTIVITY_FIELDS.map((f) => `activity_${f}`),
   'source_summary_json', 'meta_json', 'extra_json',
 ];
+
+// Every key each nested object is known to carry. Anything outside these sets
+// is collected into extra_json rather than dropped, so a field the scraper
+// starts emitting later survives a build made before anyone updated this file.
+const REVIEWER_KNOWN = new Set([
+  'reviewer_id', 'reviewer_name', 'reviewer_profile_url', 'reviewer_avatar_url',
+  'reviewer_bio', 'is_local_guide', 'total_contribution_actions',
+  'contribution_summary_text', 'local_guide', 'contributions',
+]);
+const PUBLIC_CONTENT_KNOWN = new Set([
+  'public_review_count', 'total_review_contributions', 'public_rating_count',
+  'total_rating_contributions', 'returned_review_count', 'returned_photo_count',
+  'reviews',
+]);
+const COMPLETENESS_KNOWN = new Set([
+  'is_complete', 'stop_reason', 'visible_review_count', 'returned_review_count',
+]);
+const ACTIVITY_KNOWN = new Set(ACTIVITY_FIELDS);
 
 const REVIEW_COLUMNS = [
   'reviewer_id', 'review_id', 'seq', 'rating', 'review_text',
@@ -215,6 +236,7 @@ function profileRow(record, originRun) {
     num(pc.public_rating_count), num(pc.total_rating_contributions),
     num(pc.returned_review_count), num(pc.returned_photo_count),
     bool(c.is_complete), text(c.stop_reason), num(c.visible_review_count),
+    num(c.returned_review_count), text(record._error),
     ...ACTIVITY_FIELDS.map((f) => {
       const v = a[f];
       if (typeof v === 'boolean') return bool(v);
@@ -222,8 +244,21 @@ function profileRow(record, originRun) {
       return text(v);
     }),
     json(record.source_summary), json(record._meta),
-    extras(record, PROFILE_TOP_LEVEL_KNOWN),
+    profileExtras(record, r, pc, a, c),
   ];
+}
+
+// Collects anything the columns above do not already hold, keyed by where it
+// came from, so a dropped field is impossible rather than merely unlikely.
+function profileExtras(record, reviewer, publicContent, activity, completeness) {
+  const rest = {};
+  const put = (k, v) => { if (v !== null) rest[k] = JSON.parse(v); };
+  put('_top', extras(record, PROFILE_TOP_LEVEL_KNOWN));
+  put('reviewer', extras(reviewer, REVIEWER_KNOWN));
+  put('public_content', extras(publicContent, PUBLIC_CONTENT_KNOWN));
+  put('activity', extras(activity, ACTIVITY_KNOWN));
+  put('completeness', extras(completeness, COMPLETENESS_KNOWN));
+  return Object.keys(rest).length ? JSON.stringify(rest) : null;
 }
 
 function reviewRow(review, reviewerId, seq) {

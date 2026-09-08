@@ -70,14 +70,17 @@ async function main() {
     const at = spec.indexOf('=');
     if (at < 1) throw new Error(`--source must be <label>=<dir>, got: ${spec}`);
     const label = spec.slice(0, at);
-    const dir = path.resolve(spec.slice(at + 1));
-    if (!fs.existsSync(dir)) throw new Error(`source directory not found: ${dir}`);
-    const files = fs.readdirSync(dir)
+    const target = path.resolve(spec.slice(at + 1));
+    if (!fs.existsSync(target)) throw new Error(`source not found: ${target}`);
+    // A single file is accepted so the sharded orchestrator can hand one shard
+    // per process; a directory keeps the plain single-process build usable.
+    if (fs.statSync(target).isFile()) return { label, dir: path.dirname(target), files: [target] };
+    const files = fs.readdirSync(target)
       .filter((f) => /^reviewers\.part-\d+\.ndjson$/.test(f))
       .sort()
-      .map((f) => path.join(dir, f));
-    if (!files.length) throw new Error(`no reviewers.part-N.ndjson under ${dir}`);
-    return { label, dir, files };
+      .map((f) => path.join(target, f));
+    if (!files.length) throw new Error(`no reviewers.part-N.ndjson under ${target}`);
+    return { label, dir: target, files };
   });
 
   const temporary = `${options.output}.building`;
